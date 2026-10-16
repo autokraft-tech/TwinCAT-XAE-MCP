@@ -180,40 +180,10 @@ namespace Te1000Daemon
         // xae_open_solution (L3720-3767).
         private static Json.JObj XaeOpenSolution(ActionContext ctx)
         {
-            string solutionPath = ctx.Payload.Str("solutionPath");
-            if (string.IsNullOrWhiteSpace(solutionPath)) throw new BridgeException("solutionPath is required");
-            if (!System.IO.File.Exists(solutionPath)) throw new BridgeException("Solution file not found: " + solutionPath);
-
-            bool visible = true;
-            if (ctx.Payload.Has("visible")) visible = ctx.Payload.Bool("visible");
-
-            bool closeExisting = false;
-            if (ctx.Payload.Has("closeExisting")) closeExisting = ctx.Payload.Bool("closeExisting");
-
-            bool discardChanges = false;
-            if (ctx.Payload.Has("discardChanges")) discardChanges = ctx.Payload.Bool("discardChanges");
-
-            // open_solution may pass its own mode (read by ActionContext into ctx.Mode).
-            dynamic dte = ctx.Dte(visible);
-            try { dte.MainWindow.Visible = visible; }
-            catch { }
-
-            Json.JObj current = GetSolutionInfo(dte);
-            if (current.Bool("isOpen") && closeExisting)
-            {
-                dte.Solution.Close(!discardChanges);
-            }
-
-            dte.Solution.Open(solutionPath);
-            Json.JObj solution = WaitForSolutionOpen(dte, solutionPath);
-            GetAutomationSettings(dte);
-
-            var data = new Json.JObj();
-            data["progId"] = ctx.ProgId;
-            data["solution"] = solution;
-            return data;
+            ctx.Session.OpenPinnedSolution(ctx.Payload.Bool("closeExisting"));
+            ctx.Cache.Clear();
+            return GetSolutionInfo(ctx.Dte());
         }
-
         // xae_list_commands (L3769-3803).
         private static Json.JObj XaeListCommands(ActionContext ctx)
         {
@@ -410,63 +380,21 @@ namespace Te1000Daemon
         // xae_solution_build (L5436-5502).
         private static Json.JObj XaeSolutionBuild(ActionContext ctx)
         {
-            string actionName = ctx.Payload.Str("action");
-            if (string.IsNullOrWhiteSpace(actionName)) throw new BridgeException("action is required");
-
-            bool waitForFinish = true;
-            if (ctx.Payload.Has("waitForFinish")) waitForFinish = ctx.Payload.Bool("waitForFinish");
-
-            int timeoutMs = 1800000;
-            if (ctx.Payload.Has("timeoutMs")) timeoutMs = ctx.Payload.Int("timeoutMs", 1800000);
-
-            dynamic dte = ctx.Dte(true);
-            Json.JObj solution = GetSolutionInfo(dte);
-            if (!solution.Bool("isOpen")) throw new BridgeException("No solution is open in XAE");
-
-            dynamic solutionBuild = dte.Solution.SolutionBuild;
-
-            switch (actionName)
-            {
-                case "clean":
-                    solutionBuild.Clean(waitForFinish);
-                    break;
-                case "build":
-                    solutionBuild.Build(waitForFinish);
-                    break;
-                case "rebuild":
-                    solutionBuild.Clean(waitForFinish);
-                    if (waitForFinish)
-                    {
-                        WaitForBuildFinish(solutionBuild, timeoutMs);
-                    }
-                    solutionBuild.Build(waitForFinish);
-                    break;
-                default:
-                    throw new BridgeException("Unsupported build action: " + actionName);
-            }
-
-            Json.JObj buildResult = new Json.JObj();
-            buildResult["buildState"] = (int)solutionBuild.BuildState;
-            buildResult["lastBuildInfo"] = null;
-
-            if (waitForFinish)
-            {
-                buildResult = WaitForBuildFinish(solutionBuild, timeoutMs);
-            }
-            else
-            {
-                try { buildResult["lastBuildInfo"] = (int)solutionBuild.LastBuildInfo; }
-                catch { }
-            }
-
-            var data = new Json.JObj();
-            data["action"] = actionName;
-            data["waited"] = waitForFinish;
-            data["solution"] = solution;
-            data["build"] = buildResult;
-            return data;
+            dynamic dte = ctx.Dte();
+            dynamic sm = ctx.SysManager();
+            sm.ConfigurationManager.ActiveTargetPlatform = "TwinCAT RT (x64)";
+            string plcProject = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(OfflinePolicy.SolutionPath), "MainPLC", "MainPLC.plcproj");
+            if (!System.IO.File.Exists(plcProject)) throw new BridgeException("PLC project not found: " + plcProject);
+            dynamic build = dte.Solution.SolutionBuild;
+            build.BuildProject("Debug|TwinCAT RT (x64)", plcProject, true);
+            var result = new Json.JObj();
+            result["buildState"] = (int)build.BuildState;
+            result["lastBuildInfo"] = (int)build.LastBuildInfo;
+            result["project"] = plcProject;
+            result["configuration"] = "Debug|TwinCAT RT (x64)";
+            result["offline"] = true;
+            return result;
         }
-
         // ---- error-list reading (port of XaeErrorListProbe, bridge L205-260) -
         // Reads the DTE ToolWindows ErrorList through the STRONGLY-TYPED DTE2 cast,
         // exactly like the PS bridge's XaeErrorListProbe. Raw IDispatch late

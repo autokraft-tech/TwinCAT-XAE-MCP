@@ -42,7 +42,7 @@ function rpc(sock, obj) {
 }
 
 (async () => {
-  const child = spawn(EXE, ["--pipe", PIPE, "--no-watch"], { stdio: "ignore", detached: true });
+  const child = spawn(EXE, ["--pipe", PIPE, "--no-watch"], { stdio: "ignore", detached: true, windowsHide: true });
   child.unref();
   let sock;
   try {

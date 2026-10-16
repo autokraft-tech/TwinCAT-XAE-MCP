@@ -3,6 +3,8 @@ using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
+using System.Security.AccessControl;
+using System.Security.Principal;
 
 namespace Te1000Daemon
 {
@@ -15,6 +17,7 @@ namespace Te1000Daemon
         private readonly string _pipeName;
         private readonly Dispatcher _dispatcher;
         private volatile bool _stop;
+        private NamedPipeServerStream _listening;
 
         public PipeServer(string pipeName, Dispatcher dispatcher)
         {
@@ -30,13 +33,18 @@ namespace Te1000Daemon
                 NamedPipeServerStream server = null;
                 try
                 {
+                    var security = new PipeSecurity();
+                    security.SetAccessRuleProtection(true, false);
+                    security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User, PipeAccessRights.FullControl, AccessControlType.Allow));
                     server = new NamedPipeServerStream(
                         _pipeName,
                         PipeDirection.InOut,
                         NamedPipeServerStream.MaxAllowedServerInstances,
                         PipeTransmissionMode.Byte,
-                        PipeOptions.Asynchronous);
+                        PipeOptions.Asynchronous, 65536, 65536, security);
+                    Interlocked.Exchange(ref _listening, server);
                     server.WaitForConnection();
+                    Interlocked.CompareExchange(ref _listening, null, server);
                     var conn = server;
                     var t = new Thread(() => ServeConnection(conn)) { IsBackground = true, Name = "te1000-pipe-conn" };
                     t.Start();
@@ -106,6 +114,11 @@ namespace Te1000Daemon
             }
         }
 
-        public void Stop() { _stop = true; }
+        public void Stop()
+        {
+            _stop = true;
+            var listening = Interlocked.Exchange(ref _listening, null);
+            if (listening != null) listening.Dispose();
+        }
     }
 }

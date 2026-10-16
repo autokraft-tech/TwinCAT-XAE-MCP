@@ -1,3 +1,100 @@
+# NexPlc：本机 XAE 64-bit 离线适配
+
+本 Fork 当前只公开 `xae`、`tc_tree`、`plc_pou`、`xae_build` 四组 MCP 工具。
+Daemon 使用独立允许列表强制限制能力；上游的确认字符串不能启用下载、在线变更、
+Login/Logout、配置激活、Runtime 重启、ADS 写入、设备控制、任意 DTE 命令、
+对象删除/重命名/移动、工程 XML 写入或对话框点击。
+下方保留的上游说明用于架构参考，其中更广泛的工具和部署流程在本 Fork 中不可用。
+
+完整实测结果见 [NexPlc 验证报告](docs/NEXPLC_XAE_MCP_VALIDATION.md)。
+本机 Codex 配置示例见 [examples/nexplc-codex.toml](examples/nexplc-codex.toml)。
+原 PowerShell `XaeBridge.ps1` 原型已停用，后续使用此 MCP 服务。
+
+## 本机安装与启动
+
+要求：Windows 64-bit、Node.js 20+、.NET Framework 4.7.2+、TwinCAT XAE Shell 64-bit
+及 Beckhoff Automation Interface。本机验证 Node 24.15.0、.NET Framework 4.8、
+`TcXaeShell.DTE.17.0`，工程版本为 `3.1.4026.20`。
+
+```powershell
+npm ci --ignore-scripts
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File daemon\build.ps1
+npm run check
+npm test
+npm run test:offline
+node daemon\test-ping.js
+```
+
+构建脚本会实际把找到的 interop DLL 路径传给 MSBuild，也可使用 `-InteropPath`
+或 `TE1000_INTEROP_PATH` 指定路径。无需修改 PLC 工程。
+
+按照 [Codex 官方 MCP 文档](https://developers.openai.com/codex/mcp)，将示例中的
+`mcp_servers.nexplc_xae` 配置加入用户配置，或使用 `codex mcp add` 注册 stdio 服务。
+本机已注册；入口为此仓库的 `index.js`。PATH 中旧版 CLI 0.125.0 不支持现有配置的
+`service_tier="default"`，请使用 Codex 桌面版自带的 CLI 或桌面设置管理 MCP，
+无需为旧 CLI 修改现有模型设置。
+
+第一次 `xae.status` 自动启动独立 Daemon；`createOnce` 在一个 STA 上创建或恢复
+自己持有的 XAE，打开指定 Solution 一次，随后复用 DTE/ITcSysManager。
+MCP 前端或 Codex 重启不会结束 detached Daemon。Daemon 重启通过持久化的 PID、
+进程启动时间及精确 Solution 路径恢复自己创建的实例；无法可靠附加时拒绝重复启动。
+`active` 模式只附加，不会关闭附加到的实例。
+
+## 查询、编辑和编译
+
+```text
+xae       {"action":"status"}
+tc_tree   {"action":"children","path":"TIPC^MainPLC^MainPLC项目"}
+plc_pou   {"action":"tree","path":"TIPC^MainPLC^MainPLC项目^03_POUs","depth":8}
+plc_pou   {"action":"get_decl","path":"TIPC^MainPLC^MainPLC项目^03_POUs^01_Bases^Interlock^FB_Interlock_PAx"}
+plc_pou   {"action":"get_impl","path":"TIPC^MainPLC^MainPLC项目^03_POUs^01_Bases^Interlock^FB_Interlock_PAx"}
+```
+
+已验证的写接口为 ST FB 的 `CreateChild(604, language=1)`、`DeclarationText` 和
+`ImplementationText`。仅在有写入授权的隔离副本中设置以下启动环境：
+
+- `TE1000_MCP_SOLUTION_PATH`：该副本 `.sln` 的绝对路径。
+- `TE1000_WRITE_SOLUTION_PATH`：同一个绝对路径；未配置或不一致时拒绝所有写入、保存和编译。
+- `TE1000_WRITE_ROOTS`：允许修改的完整 XAE 对象路径，以分号分隔；本次仅允许 `TIPC^MainPLC^MainPLC项目^03_POUs^FB_MCP_Test`。
+- `TE1000_DAEMON_PIPE`：独立管道名，不要与正式工程会话共用。
+
+配置在 Daemon 启动时固定。新建使用 `plc_pou.create`，修改使用 `set_decl`、
+`set_impl`，保存使用 `xae.save_all`，重新加载使用同一路径的
+`xae.open_solution(closeExisting:true)`。离线编译使用 `xae_build(action:"build")`；
+该操作只调用 PLC 项目的 `SolutionBuild.BuildProject`，之后读取 `xae.error_list`。
+新建拒绝重复名称；修改声明必须保持原 FB 名称，XAE 保留原 GUID。
+不支持的 Method/DUT/GVL 创建或修改应停止，先单独验证官方接口。
+
+已注册的正式 NexPlc 会话保持只读。不要修改 SPT V4 库，也不要手工生成/改写
+TcPOU、plcproj XML 或对象 GUID。读取结果中的 `session` 提供 XAE/Daemon PID、
+所有权及此 Daemon 的 Solution 打开次数，便于检查是否复用。
+
+## 停止与故障处理
+
+先退出正在使用该服务的客户端，再用相同管道名执行运维停止命令：
+
+```powershell
+$env:TE1000_DAEMON_PIPE = 'nexplc-readonly-validation'
+node -e 'require("./daemonClient").runViaDaemon("daemon_shutdown").then(x=>{console.log(JSON.stringify(x));setTimeout(()=>process.exit(0),500)}).catch(e=>{console.error(e.message);process.exit(1)})'
+```
+
+该运维动作不属于 Codex MCP 工具面。它只关闭自己创建且没有未保存内容的 XAE；
+附加实例保持打开。不要使用按进程名称批量结束所有 XAE 的命令。
+
+对话框只检测和报告，不自动点击。超时/对话框会使 COM worker 停止接受后续工作；
+请求断线也不会自动重放。先人工核查操作是否已完成、保存需要保留的内容并处理窗口，
+再停止对应 Daemon、重启服务。不要在结果未知时重复写入。
+如果日志提示 owned XAE 仍在但无法附加，应人工核对报告的 PID；不能删除租约后
+直接启动第二个 XAE。租约位于 `%LOCALAPPDATA%\NexPlcXaeMcp`，同处保留注册前的
+Codex 配置备份。工程路径不存在或不符时服务拒绝操作，不生成替代 XML。
+
+`artifacts/validation/` 保存本机调用记录、诊断及哈希，已被 Git 忽略；不要将包含
+工程源码的本机诊断记录直接发布到公共仓库。
+
+---
+
+## 上游参考说明（部分能力在此 Fork 中已禁用）
+
 <p align="center">
   <img src="docs/assets/te1000-banner.png" alt="TE1000 MCP — MCP server for Beckhoff TwinCAT XAE / TE1000 Automation Interface" width="100%">
 </p>

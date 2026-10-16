@@ -2,7 +2,7 @@
 # .NET Framework MSBuild. No .NET SDK / NuGet / internet required.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File daemon\build.ps1 [-Debug]
-param([switch]$Debug)
+param([switch]$Debug, [string]$InteropPath = $env:TE1000_INTEROP_PATH)
 
 $ErrorActionPreference = 'Stop'
 $config = if ($Debug) { 'Debug' } else { 'Release' }
@@ -15,20 +15,22 @@ if (-not (Test-Path -LiteralPath $msbuild)) {
 # Resolve the TwinCAT System Manager interop the csproj references. If TwinCAT
 # lives elsewhere, edit the HintPath in Te1000Daemon.csproj.
 $tcatCandidates = @(
+    $InteropPath,
+    'C:\Program Files (x86)\Beckhoff\TwinCAT\Functions\TF3500-Analytics-Logger\SystemManagerExtension\TCatSysManagerLib.dll',
     'C:\Program Files (x86)\Beckhoff\TwinCAT\Functions\TE2000-HMI-Engineering\VisualStudio\2022\TCatSysManagerLib.dll',
     'C:\Program Files (x86)\Beckhoff\TwinCAT\Functions\TE2000-HMI-Engineering\VisualStudio\2026\TCatSysManagerLib.dll',
     'C:\Program Files (x86)\Beckhoff\TwinCAT\Functions\TE2000-HMI-Engineering\VisualStudio\TcXaeShell\TCatSysManagerLib.dll'
 )
-$found = $tcatCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$found = $tcatCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
 if (-not $found) {
-    Write-Warning "TCatSysManagerLib.dll not found at the known paths; the build may fail. Edit the HintPath in Te1000Daemon.csproj."
+    throw 'TCatSysManagerLib.dll not found. Pass -InteropPath or set TE1000_INTEROP_PATH.'
 } else {
     Write-Host "Using TCatSysManagerLib: $found"
 }
 
 $proj = Join-Path $PSScriptRoot 'Te1000Daemon.csproj'
 Write-Host "Building $proj ($config|x64)..."
-& $msbuild $proj -nologo "-p:Configuration=$config" -p:Platform=x64 -v:minimal
+& $msbuild $proj -nologo "-p:Configuration=$config" -p:Platform=x64 "-p:TCatSysManagerInterop=$found" -v:minimal
 if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)." }
 
 $exe = Join-Path $PSScriptRoot "bin\$config\Te1000Daemon.exe"

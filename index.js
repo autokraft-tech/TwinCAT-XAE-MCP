@@ -28,6 +28,7 @@ const daemonClient = require("./daemonClient.js");
 // map also live there (the schema descriptions interpolate the tokens), and are
 // re-imported here so the handlers reference the same definitions.
 const { toolSchemas, XAE_ACTIONS } = require("./toolSchemas.js");
+const { offlineSchemas } = require("./offlineSchemas.js");
 
 // Confirmation tokens are defined in toolSchemas.js (so the schema descriptions and
 // the handler guards share one definition) and re-exported on that module.
@@ -191,7 +192,13 @@ function buildServer() {
       },
     },
   );
-  for (const [name, config, handler] of registrations) mcp.registerTool(name, config, handler);
+  for (const [name, , handler] of registrations) {
+    if (!offlineSchemas[name]) continue;
+    mcp.registerTool(name, offlineSchemas[name], async (params) => {
+      try { return await handler(params); }
+      catch (error) { return { isError: true, content: [{ type: "text", text: error.message }] }; }
+    });
+  }
   return mcp;
 }
 
@@ -202,7 +209,7 @@ server.registerTool(
     const payload = { mode };
     if (action === "open_solution") {
       need({ solutionPath }, ["solutionPath"], action);
-      Object.assign(payload, { solutionPath, visible: true, closeExisting: closeExisting || false, discardChanges: discardChanges === true, mode: mode || "activeOrCreate" });
+      Object.assign(payload, { solutionPath, visible: true, closeExisting: closeExisting || false, discardChanges: discardChanges === true });
     }
     if (action === "list_commands") Object.assign(payload, { filter, limit });
     if (action === "error_list") Object.assign(payload, { limit, severityFilter });

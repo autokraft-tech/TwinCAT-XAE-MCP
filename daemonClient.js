@@ -28,12 +28,12 @@ const CONNECT_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_CONNECT_MS) || 20000
 // own per-call ceiling is ~180s and long actions carry their own larger
 // timeoutMs; keep this Node-side wall comfortably above that so we don't pre-empt
 // a daemon call that is legitimately still running. 0 disables (parity escape).
-const REQUEST_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_REQUEST_MS) || 1900000;
+const REQUEST_TIMEOUT_MS = process.env.TE1000_DAEMON_REQUEST_MS === undefined ? 1900000 : Number(process.env.TE1000_DAEMON_REQUEST_MS);
 
 // Watcher/auto-dismiss knobs are honored by the daemon via CLI flags (it runs
 // the watcher internally as a thread). Mirror the index.js env switches.
 const DIALOG_WATCH = process.env.TE1000_DIALOG_WATCH !== "0";
-const AUTO_DISMISS = process.env.TE1000_DIALOG_AUTODISMISS !== "0";
+const AUTO_DISMISS = false;
 const GRACE_MS = Number(process.env.TE1000_DIALOG_GRACE_MS) || 4000;
 
 let sock = null;
@@ -54,6 +54,7 @@ function spawnDaemon() {
   // Detached so the daemon outlives this MCP process restart; it self-guards as
   // a single instance per pipe name (named mutex), so duplicate spawns are safe.
   const child = spawn(EXE_PATH, args, { stdio: "ignore", detached: true, windowsHide: true });
+  child.on("error", (error) => console.error("Daemon spawn failed:", error.message));
   child.unref();
 }
 
@@ -61,6 +62,7 @@ function attachSocket(s) {
   sock = s;
   rxBuf = "";
   s.setNoDelay(true);
+  s.setEncoding("utf8"); // Preserve Chinese paths split across pipe frames.
   s.on("data", (chunk) => {
     rxBuf += chunk.toString("utf8");
     let nl;
@@ -175,7 +177,7 @@ function sendOnce(action, payload) {
     }
 
     try {
-      s.write(JSON.stringify({ id, action, payload }) + "\n");
+      s.write(JSON.stringify({ id, action, payload: { ...payload, expectedSolutionPath: process.env.TE1000_MCP_SOLUTION_PATH } }) + "\n");
     } catch (e) {
       if (timer) { clearTimeout(timer); timer = null; }
       pending.delete(id);
@@ -191,21 +193,8 @@ function toError(action, resp) {
   const btns = Array.isArray(d.buttons) && d.buttons.length
     ? d.buttons.map((b) => `[${b}]`).join(" ") : "(none detected)";
   if (kind === "dialog_blocked") {
-    const labels = Array.isArray(d.buttons) && d.buttons.length
-      ? d.buttons.map((b) => `'${b}'`).join(", ") : "(none detected)";
-    return new Error(
-      `XAE is blocked on a modal dialog, so this '${action}' call cannot complete.\n` +
-      `This dialog is NOT in the auto-dismiss allowlist (dialog-allowlist.json).\n` +
-      `  Title:   ${d.title || "(untitled)"}\n` +
-      `  Message: ${d.text || "(no text)"}\n` +
-      `  Buttons: ${btns}\n` +
-      `ASK THE USER which button to press and whether to remember it (add to the ` +
-      `allowlist so this dialog is auto-dismissed next time). The choices are: ${labels}.\n` +
-      `Then call the 'xae' tool with action 'dialog_resolve', e.g. ` +
-      `{action:'dialog_resolve', button:'No', remember:false}. ` +
-      `(remember:true persists a rule, but destructive prompts — activate/restart/download/safety — are refused for auto-remember.) ` +
-      `The operation's result is indeterminate until the dialog is cleared.`,
-    );
+    return new Error(`XAE dialog blocked '${action}': ${d.title || "(untitled)"}; ${d.text || ""}. Buttons: ${btns}. No button was clicked. Resolve manually, inspect the operation outcome, then restart the daemon.`);
+
   }
   if (kind === "timeout") {
     return new Error(
@@ -219,31 +208,13 @@ function toError(action, resp) {
 }
 
 // Public: run an action via the daemon. Resolves with the `result` (== the PS
-// bridge's `data`), rejects with a mapped Error. One transparent reconnect retry
-// on a dropped pipe.
-function isRetryablePipeError(e) {
-  return !!(e && (e.pipeClosed || /pipe closed|ECONNRESET|EPIPE/i.test(e.message || "")));
-}
+// bridge's `data`), rejects with a mapped Error. The next explicit request can
+// reconnect after a dropped pipe; an in-flight request is never replayed.
 
 async function runViaDaemon(action, payload = {}) {
-  let resp;
-  try {
-    resp = await sendOnce(action, payload);
-  } catch (e) {
-    if (isRetryablePipeError(e)) {
-      try {
-        resp = await sendOnce(action, payload); // reconnect + retry once
-      } catch (e2) {
-        // The pipe is still dropping after a reconnect attempt (a daemon that
-        // connects but immediately closes every frame). Flag it daemon-unavailable
-        // and surface the error to the caller — the daemon is the only backend.
-        if (isRetryablePipeError(e2)) e2.daemonUnavailable = true;
-        throw e2;
-      }
-    } else {
-      throw e;
-    }
-  }
+  // A dropped response does not prove the COM action was not executed. Never
+  // replay a request; the next explicit call can reconnect to the same daemon.
+  const resp = await sendOnce(action, payload);
   if (resp.ok) return resp.result;
   throw toError(action, resp);
 }

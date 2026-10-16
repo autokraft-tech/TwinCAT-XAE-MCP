@@ -43,8 +43,8 @@ namespace Te1000Daemon
 
     // Owns the single STA thread that makes all DTE/COM calls. Serializes
     // requests through a blocking queue. On a per-request hard timeout (or a
-    // persistent modal dialog), abandons the STA thread and spins up a fresh one,
-    // re-acquiring the session — without killing the daemon.
+    // persistent modal dialog), stops accepting work until an operator resolves
+    // the indeterminate call and restarts the daemon. Never starts a second STA.
     public sealed class ComWorker : IDisposable
     {
         private readonly DialogWatcher _watcher;
@@ -56,8 +56,8 @@ namespace Te1000Daemon
         private ComSession _session;
         private readonly object _lifecycleGate = new object();
         private volatile bool _disposed;
+        private volatile bool _faulted;
 
-        // Re-acquire callback runs on the STA thread after a recycle.
         public ComWorker(DialogWatcher watcher, int defaultTimeoutMs, int blockGraceMs)
         {
             _watcher = watcher;
@@ -76,6 +76,7 @@ namespace Te1000Daemon
         {
             _queue = new BlockingCollection<WorkItem>();
             _session = new ComSession();
+            _session.ProcessIdentified = delegate(int pid) { if (_watcher != null) _watcher.TargetPid = pid; };
             _sta = new Thread(Pump) { IsBackground = true, Name = "te1000-com-sta" };
             _sta.SetApartmentState(ApartmentState.STA);
             _sta.Start();
@@ -86,6 +87,8 @@ namespace Te1000Daemon
             // Register the message filter on THIS STA thread (per-thread).
             try { Te1000MessageFilter.Register(); } catch (Exception ex) { Log.Error("MessageFilter.Register", ex); }
 
+            try
+            {
             foreach (var item in _queue.GetConsumingEnumerable())
             {
                 WorkResult res = new WorkResult();
@@ -111,6 +114,8 @@ namespace Te1000Daemon
                 item.Result = res;
                 item.Done.Set();
             }
+            }
+            finally { _session.Dispose(); }
         }
 
         // Enqueue a job and wait for it on the STA thread, honoring a hard
@@ -118,11 +123,13 @@ namespace Te1000Daemon
         internal WorkResult Run(Func<Json.JObj> job, int timeoutMs)
         {
             if (_disposed) throw new ObjectDisposedException("ComWorker");
+            if (_faulted) return new WorkResult { Ok = false, Error = "COM worker stopped after timeout/dialog; result may be indeterminate. Resolve XAE state and restart daemon; do not replay writes.", Kind = ErrorKind.ComError };
             int budget = timeoutMs > 0 ? timeoutMs : _defaultTimeoutMs;
 
             WorkItem item;
             lock (_lifecycleGate)
             {
+                if (_faulted) return new WorkResult { Ok = false, Error = "COM worker is stopped; restart daemon after resolving XAE state." };
                 item = new WorkItem { Job = job };
                 _queue.Add(item);
             }
@@ -142,7 +149,7 @@ namespace Te1000Daemon
                 if (blockedFor >= _blockGraceMs && _blockGraceMs > 0)
                 {
                     var snap = _watcher.Latest;
-                    RecycleAsync();
+                    StopAfterIndeterminateCall();
                     return new WorkResult
                     {
                         Ok = false,
@@ -154,7 +161,7 @@ namespace Te1000Daemon
 
                 if (budget > 0 && sw.ElapsedMilliseconds >= budget)
                 {
-                    RecycleAsync();
+                    StopAfterIndeterminateCall();
                     return new WorkResult
                     {
                         Ok = false,
@@ -165,79 +172,28 @@ namespace Te1000Daemon
             }
         }
 
-        // Fire-and-forget: enqueue a job on the STA thread and return immediately.
-        // Used for background pre-warm — the caller does not wait for or read the
-        // result. Exceptions inside `job` are swallowed by the Pump and logged.
-        // If the worker is mid-recycle the add can race a CompleteAdding; that is
-        // benign (the job is simply dropped) and guarded.
-        public void EnqueueBackground(Func<Json.JObj> job)
-        {
-            if (_disposed) return;
-            try
-            {
-                lock (_lifecycleGate)
-                {
-                    var item = new WorkItem { Job = job };
-                    _queue.Add(item);
-                }
-            }
-            catch { /* queue completed/disposed — drop silently */ }
-        }
-
-        // Abandon the (likely-stuck-in-a-modal-loop) STA thread and start a fresh
-        // one. The old thread is a background thread so it dies with the process
-        // if it ever unblocks; we simply stop feeding it.
-        private void RecycleAsync()
+        // A timed-out COM call can still finish later. Never start another STA
+        // or accept more work while the outcome is unknown.
+        private void StopAfterIndeterminateCall()
         {
             lock (_lifecycleGate)
             {
-                var oldQueue = _queue;
-                try { oldQueue.CompleteAdding(); } catch { }
-                Log.Write("ComWorker: recycling STA thread (abandoning stuck worker)");
-
-                // DRAIN the old queue and FAULT every still-pending WorkItem so any
-                // sibling caller waiting in Run() rejects with a clear error instead
-                // of hanging forever. The item currently executing on the abandoned
-                // STA thread is NOT in the queue (its caller already gets the
-                // timeout/dialog result that triggered this recycle); only the items
-                // still queued behind it need faulting here.
-                try
+                _faulted = true;
+                _queue.CompleteAdding();
+                WorkItem pending;
+                while (_queue.TryTake(out pending))
                 {
-                    WorkItem stuck;
-                    while (oldQueue.TryTake(out stuck))
-                    {
-                        if (stuck == null) continue;
-                        stuck.Result = new WorkResult
-                        {
-                            Ok = false,
-                            Kind = ErrorKind.ComError,
-                            Error = "Worker recycled (a sibling call wedged XAE); this queued call was abandoned. Retry."
-                        };
-                        try { stuck.Done.Set(); } catch { }
-                    }
+                    pending.Result = new WorkResult { Ok = false, Error = "COM worker stopped; queued request was not executed." };
+                    pending.Done.Set();
                 }
-                catch (Exception ex) { Log.Error("ComWorker.RecycleAsync.drain", ex); }
-
-                var oldSession = _session;
-                StartThread();
-                // The new session will re-acquire DTE lazily on next use. Only
-                // MarkStale (null the refs) here — do NOT Dispose/release the old
-                // session's COM proxies. Recycle fires because the abandoned STA
-                // thread is wedged INSIDE a COM call still holding the DTE/sysmgr
-                // RCWs; releasing those RCWs to zero from this (different) thread
-                // would race the in-flight call and could tear the proxy out from
-                // under it (AV), not fail benignly. The handful of leaked proxies
-                // per (rare) recycle is negligible vs. that hazard. Clean teardown
-                // still releases them via ComSession.Dispose on process shutdown.
-                try { if (oldSession != null) oldSession.MarkStale(); } catch { }
             }
         }
-
         public void Dispose()
         {
             _disposed = true;
             try { _queue.CompleteAdding(); } catch { }
-            try { if (_session != null) _session.Dispose(); } catch { }
+            // The owning STA releases COM in Pump.finally.
+            if (Thread.CurrentThread != _sta) _sta.Join(5000);
         }
     }
 }

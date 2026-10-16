@@ -22,7 +22,7 @@ namespace Te1000Daemon
 
             string pipeName = "te1000-mcp";
             bool watch = true;
-            bool autoDismiss = true;
+            bool autoDismiss = false;
             int graceMs = 4000;        // matches index.js TE1000_DIALOG_GRACE_MS default
             string allowlist = DefaultAllowlistPath();
 
@@ -67,6 +67,8 @@ namespace Te1000Daemon
                     var dispatcher = new Dispatcher(worker);
                     Log.Write("Dispatcher ready; " + dispatcher.ActionCount + " actions registered.");
                     var server = new PipeServer(pipeName, dispatcher);
+                    dispatcher.RequestStop = server.Stop;
+                    Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs e) { e.Cancel = true; server.Stop(); };
 
                     // Run the pipe server on the main thread (blocks until killed).
                     server.Run();

@@ -10,12 +10,12 @@ namespace Te1000Daemon
     public static class ComHelpers
     {
         // Is-RetryableComError (L500-507): RPC_E_CALL_REJECTED (-2147418111) or
-        // RPC_E_SERVERCALL_RETRYLATER (-2147023174).
+        // RPC_E_SERVERCALL_RETRYLATER (-2147417846). Server unavailable is not busy.
         public static bool IsRetryableComError(Exception ex)
         {
             if (ex == null) return false;
             int code = ex.HResult;
-            return code == -2147418111 || code == -2147023174;
+            return code == -2147418111 || code == -2147417846;
         }
 
         // Get-ErrorCode (L43-48): "0x{HRESULT:X8}".
@@ -79,12 +79,12 @@ namespace Te1000Daemon
 
         public static int ChildCount(dynamic treeItem)
         {
-            try { return (int)treeItem.ChildCount; } catch { return 0; }
+            return (int)treeItem.ChildCount;
         }
 
         public static dynamic Child(dynamic treeItem, int index)
         {
-            try { return treeItem.Child(index); } catch { return null; }
+            return treeItem.Child(index);
         }
 
         // ConsumeXml with GetLastXmlError surfacing (used by many set_xml handlers).

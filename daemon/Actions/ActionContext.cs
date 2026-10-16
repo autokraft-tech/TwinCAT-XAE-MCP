@@ -23,7 +23,7 @@ namespace Te1000Daemon
             Cache = cache;
             Edits = edits;
             ProgId = Payload.Truthy("progId") ? Payload.Str("progId") : "TcXaeShell.DTE.17.0";
-            Mode = Payload.Truthy("mode") ? Payload.Str("mode") : "active";
+            Mode = OfflinePolicy.SessionMode;
         }
 
         public dynamic Dte(bool visible = true) { return Session.GetDte(ProgId, Mode, visible); }

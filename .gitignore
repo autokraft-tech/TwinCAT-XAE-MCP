@@ -1,4 +1,5 @@
 node_modules/
+artifacts/
 *.log
 
 # Local point-in-time snapshots (e.g. index.js.pre-dialogwatch.bak) — not source of truth

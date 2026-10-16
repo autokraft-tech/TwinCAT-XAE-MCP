@@ -749,6 +749,10 @@ namespace Te1000Daemon
             string declText = ctx.Payload.Str("declText");
             dynamic sm = ctx.SysManager();
             dynamic item = ComHelpers.GetTreeItem(sm, path);
+            if (((ITcSmTreeItem)(object)item).ItemType != 604) throw new BridgeException("Only function-block writes have been validated locally.");
+            Match header = Regex.Match(declText, @"(?i)\A\s*FUNCTION_BLOCK\s+(?:(?:FINAL|ABSTRACT)\s+)?([A-Za-z_][A-Za-z0-9_]*)\b");
+            if (!header.Success || header.Groups[1].Value != (string)item.Name)
+                throw new BridgeException("Declaration must preserve the existing function-block name.");
             PouHelper.SetDeclaration((object)item, declText);
             ctx.Cache.Invalidate(path);
 
@@ -814,6 +818,8 @@ namespace Te1000Daemon
             dynamic sm = ctx.SysManager();
             dynamic item = ComHelpers.GetTreeItem(sm, path);
             string via = hasText ? "text" : "xml";
+            if (((ITcSmTreeItem)(object)item).ItemType != 604 || PouHelper.GetImplementationLanguage((object)item) != 1)
+                throw new BridgeException("Only ST function-block writes have been validated locally.");
             if (hasText) PouHelper.SetImplementationText((object)item, ctx.Payload.Str("implText"));
             else PouHelper.SetImplementationXml((object)item, ctx.Payload.Str("implXml"));
             ctx.Cache.Invalidate(path);
@@ -1328,6 +1334,12 @@ namespace Te1000Daemon
             dynamic parentItem = ComHelpers.GetTreeItem(sm, parent);
             object vInfo = BuildVInfo(subType, language, returnType, extends, implements, declText);
 
+            // Enumerate authoritatively; do not interpret a failed lookup as absence.
+            ITcSmTreeItem typedParent = (ITcSmTreeItem)(object)parentItem;
+            for (int i = 1; i <= typedParent.ChildCount; i++)
+                if (string.Equals(typedParent.get_Child(i).Name, name, StringComparison.OrdinalIgnoreCase))
+                    throw new BridgeException("PLC object already exists; overwrite is disabled: " + name);
+
             dynamic child = parentItem.CreateChild(name, subType, before, vInfo);
             AssertWellFormedChild(parentItem, child, name, subType, parent);
             return child;
@@ -1408,11 +1420,6 @@ namespace Te1000Daemon
             }
 
             if (reason == null) return;
-
-            if (!string.IsNullOrWhiteSpace(childActualName))
-            {
-                try { parent.DeleteChild(childActualName); } catch { }
-            }
 
             throw new BridgeException("CreateChild produced a malformed child (name='" + childActualName + "', path='" + childPath +
                 "') for requested name='" + requestedName + "', subType=" + subType.ToString(CultureInfo.InvariantCulture) +
