@@ -24,6 +24,8 @@ namespace Te1000Daemon
         private System.Threading.Mutex _ownerMutex;
         private string _initializationError;
         private string _initializationStage = "DTE acquisition";
+        private string _lease;
+        private bool _recoveredStateChecked;
         public Action<int> ProcessIdentified;
 
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
@@ -33,6 +35,7 @@ namespace Te1000Daemon
         internal ProjectSaveAudit SaveAudit { get { return _saveAudit ?? (_saveAudit = new ProjectSaveAudit(OfflinePolicy.SolutionPath)); } }
         internal void BeforeObjectWrite(string path, bool create, int type = 604)
         {
+            AssertRecoveredSaved();
             foreach (dynamic document in _dte.Documents)
                 if (!(bool)document.Saved) throw new BridgeException("Unsaved editor document detected; preserve user edits before MCP writes.");
             SaveAudit.BeforeObjectWrite(path, create, type);
@@ -40,6 +43,7 @@ namespace Te1000Daemon
         internal Json.JObj SaveAudited()
         {
             AssertSolution();
+            AssertRecoveredSaved();
             string root = Path.GetDirectoryName(Path.GetFullPath(OfflinePolicy.SolutionPath)) + Path.DirectorySeparatorChar;
             foreach (dynamic project in _dte.Solution.Projects)
                 if (!Path.GetFullPath((string)project.FullName).StartsWith(root, StringComparison.OrdinalIgnoreCase))
@@ -49,19 +53,39 @@ namespace Te1000Daemon
                     throw new BridgeException("Unsaved editor document detected; SaveAll could overwrite user edits. Save refused.");
             return SaveAudit.Save(delegate { _dte.ExecuteCommand("File.SaveAll"); });
         }
+        internal void AssertRecoveredSaved()
+        {
+            SaveAudit.AssertUnblocked();
+            if (!SaveAudit.Recovered || _recoveredStateChecked) return;
+            try { AssertSaved(); }
+            catch (Exception ex) { SaveAudit.Block("Recovered XAE has unproven unsaved state: " + ex.Message); throw; }
+            _recoveredStateChecked = true;
+        }
         public bool CloseOwned()
         {
+            if (OfflinePolicy.SamePath(OfflinePolicy.SolutionPath, OfflinePolicy.WriteSolutionPath)) SaveAudit.AssertCanCloseOrCreate();
             if (_dte == null || !_owned || !ProcessAlive()) return false;
             AssertSolution();
+            AssertSaved();
+            _dte.Solution.Close(false);
+            _dte.Quit();
+            try
+            {
+                using (var process = Process.GetProcessById(_xaePid))
+                    if (!process.WaitForExit(10000)) throw new BridgeException("Owned XAE exit not yet confirmed; preserve lease and diagnose.");
+            }
+            catch (ArgumentException) { } // The identified process has already exited.
+            File.WriteAllLines(_lease, LeaseFields("closed"));
+            _owned = false;
+            return true;
+        }
+        private void AssertSaved()
+        {
             if (!(bool)_dte.Solution.Saved) throw new BridgeException("Owned solution has unsaved changes; refusing shutdown.");
             foreach (dynamic project in _dte.Solution.Projects)
                 if (!(bool)project.Saved) throw new BridgeException("Owned project has unsaved changes; refusing shutdown.");
             foreach (dynamic document in _dte.Documents)
                 if (!(bool)document.Saved) throw new BridgeException("Owned document has unsaved changes; refusing shutdown.");
-            _dte.Solution.Close(false);
-            _dte.Quit();
-            _owned = false;
-            return true;
         }
         public Json.JObj Info()
         {
@@ -71,6 +95,8 @@ namespace Te1000Daemon
             info["owned"] = _owned;
             info["mode"] = _mode;
             info["solutionOpenCount"] = _openCount;
+            info["xaeStartTicks"] = _xaeStartTicks.ToString();
+            info["identity"] = LifecycleIdentity.Info();
             return info;
         }
 
@@ -86,7 +112,11 @@ namespace Te1000Daemon
             GetWindowThreadProcessId(new IntPtr((long)_dte.MainWindow.HWnd), out pid);
             if (pid == 0) throw new BridgeException("Cannot identify XAE process; refusing an unowned session.");
             _xaePid = (int)pid;
-            using (var p = Process.GetProcessById(_xaePid)) _xaeStartTicks = p.StartTime.ToUniversalTime().Ticks;
+            using (var p = Process.GetProcessById(_xaePid))
+            {
+                if (p.SessionId != LifecycleIdentity.SessionId) throw new BridgeException("Cross-session XAE rejected.");
+                _xaeStartTicks = p.StartTime.ToUniversalTime().Ticks;
+            }
             if (ProcessIdentified != null) ProcessIdentified(_xaePid);
         }
 
@@ -162,8 +192,8 @@ namespace Te1000Daemon
                     AssertSolution();
                     return _dte;
                 }
-                SafeRelease((object)_sysManager); SafeRelease((object)_dte);
-                _dte = null; _sysManager = null; _owned = false;
+                _initializationError = "XAE process lost; no automatic replacement. Inspect audit and lease before operator restart.";
+                throw new BridgeException(_initializationError);
             }
 
             try
@@ -211,7 +241,7 @@ namespace Te1000Daemon
                 key = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(OfflinePolicy.SolutionPath).ToUpperInvariant()))).Replace("-", "");
             if (_ownerMutex == null)
             {
-                _ownerMutex = new System.Threading.Mutex(false, "Local\\NexPlcXae_" + key);
+                _ownerMutex = new System.Threading.Mutex(false, "Global\\NexPlcXae_" + key);
                 bool acquired;
                 try { acquired = _ownerMutex.WaitOne(0); } catch (System.Threading.AbandonedMutexException) { acquired = true; }
                 if (!acquired) throw new BridgeException("Another daemon owns this solution's createOnce session.");
@@ -219,11 +249,14 @@ namespace Te1000Daemon
             string leaseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexPlcXaeMcp");
             Directory.CreateDirectory(leaseDir);
             string lease = Path.Combine(leaseDir, key + ".lease");
+            _lease = lease;
             if (File.Exists(lease))
             {
                 string[] fields = File.ReadAllLines(lease);
                 int pid; long ticks;
-                if (fields.Length != 2 || !int.TryParse(fields[0], out pid) || !long.TryParse(fields[1], out ticks))
+                if (fields.Length != 7 || fields[2] != LifecycleIdentity.SessionId.ToString() || fields[3] != LifecycleIdentity.UserSid ||
+                    fields[4] != LifecycleIdentity.PipeName || !OfflinePolicy.SamePath(fields[5], OfflinePolicy.SolutionPath) ||
+                    !int.TryParse(fields[0], out pid) || !long.TryParse(fields[1], out ticks))
                     throw new BridgeException("Invalid XAE ownership lease: " + lease);
                 bool alive = false;
                 try { using (var p = Process.GetProcessById(pid)) alive = !p.HasExited && p.StartTime.ToUniversalTime().Ticks == ticks; }
@@ -235,14 +268,16 @@ namespace Te1000Daemon
                     {
                         uint entryPid;
                         GetWindowThreadProcessId(new IntPtr((long)entry.Dte.MainWindow.HWnd), out entryPid);
-                        if (entryPid == pid && OfflinePolicy.SamePath(entry.Solution, OfflinePolicy.SolutionPath))
+                        if (entryPid == pid && fields[6] == "owned" && OfflinePolicy.SamePath(entry.Solution, OfflinePolicy.SolutionPath))
                         { recovered = entry; }
                         else SafeRelease((object)entry.Dte);
                     }
                     if (recovered != null) { _owned = true; return recovered.Dte; }
                     throw new BridgeException("Owned XAE PID " + pid + " is still alive but cannot be reattached. Close that instance manually before restarting; no duplicate was created.");
                 }
+                if (fields[6] != "closed") throw new BridgeException("Owned XAE was lost without audited shutdown; no replacement will be created. Preserve lease/journal.");
             }
+            if (OfflinePolicy.SamePath(OfflinePolicy.SolutionPath, OfflinePolicy.WriteSolutionPath)) SaveAudit.AssertCanCloseOrCreate();
             // If COM creation crashes before the PID is known, an invalid/pending
             // lease forces operator review instead of starting a duplicate XAE.
             File.WriteAllLines(lease, new[] { "pending", Process.GetCurrentProcess().Id.ToString() });
@@ -250,13 +285,19 @@ namespace Te1000Daemon
             _dte = created;
             _owned = true;
             RecordProcess();
-            File.WriteAllLines(lease, new[] { _xaePid.ToString(), _xaeStartTicks.ToString() });
+            File.WriteAllLines(lease, LeaseFields("owned"));
             _initializationStage = "TcRemoteManager lookup";
             Log.Write("Created owned XAE PID " + _xaePid + "; selecting engineering version " + OfflinePolicy.XaeVersion);
             dynamic remote = created.GetObject("TcRemoteManager");
             _initializationStage = "TcRemoteManager.Version";
             remote.Version = OfflinePolicy.XaeVersion;
             return created;
+        }
+
+        private string[] LeaseFields(string state)
+        {
+            return new[] { _xaePid.ToString(), _xaeStartTicks.ToString(), LifecycleIdentity.SessionId.ToString(), LifecycleIdentity.UserSid,
+                LifecycleIdentity.PipeName, Path.GetFullPath(OfflinePolicy.SolutionPath), state };
         }
 
         private dynamic CreateDte(string progId, bool visible)

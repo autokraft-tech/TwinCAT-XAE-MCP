@@ -9,6 +9,9 @@ const { McpClient } = require("./mcp-client");
 const stage = process.argv[2];
 const worktree = path.resolve(process.argv[3] || "missing");
 const binary = path.resolve(process.argv[4] || "missing");
+const production = process.env.NEXPLC_PRODUCTION_SOLUTION;
+assert.ok(production && path.isAbsolute(production), "Set the exact NEXPLC_PRODUCTION_SOLUTION before live acceptance");
+assert.notEqual(stage, "alias", "ALIAS 623 is disabled; do not replay failed validation");
 const plc = "TIPC^MainPLC^MainPLC项目";
 const definitions = {
   struct: { type: 606, name: "ST_P2Resume", text: "TYPE ST_P2Resume :\nSTRUCT\n    bEnable : BOOL;\n    nCount : DINT;\n    rValue : REAL;\n    aValues : ARRAY[0..2] OF REAL;\nEND_STRUCT\nEND_TYPE\n", from: "0..2", to: "0..3", fbVars: "    stData : ST_P2Resume;", code: "stData.bEnable := TRUE;\nstData.nCount := 42;\nstData.rValue := DINT_TO_REAL(stData.nCount);\nstData.aValues[0] := stData.rValue;\n" },
@@ -18,7 +21,7 @@ const definitions = {
 };
 assert.ok(definitions[stage], "choose exactly one supported validation stage");
 const d = definitions[stage];
-assert.notEqual(worktree.toLowerCase(), "d:\\will\\documents\\source\\repos\\nexplc");
+assert.notEqual(worktree.toLowerCase(), path.dirname(path.dirname(production)).toLowerCase());
 assert.ok(path.basename(worktree).startsWith("NexPlc-p2-20261019-"));
 assert.ok(fs.existsSync(binary));
 assert.equal(execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: worktree, encoding: "utf8" }), "", "fresh clean worktree required");
@@ -69,7 +72,7 @@ async function readonlyRejection() {
       socket.on("data", data => { buffer += data; if (!buffer.includes("\n")) return; clearTimeout(timer); resolve(JSON.parse(buffer.slice(0, buffer.indexOf("\n")))); });
       socket.once("error", reject);
     });
-    socket.write(JSON.stringify({ id: "readonly-" + stage, action: "plc_pou_create", payload: { parent: plc + "^" + objectFolder, name: d.name, subType: d.type, expectedHash: "absent", declText: d.text, expectedSolutionPath: "D:\\Will\\Documents\\source\\repos\\NexPlc\\MySPT_Machine\\MySPT_Machine.sln" } }) + "\n");
+    socket.write(JSON.stringify({ id: "readonly-" + stage, action: "plc_pou_create", payload: { parent: plc + "^" + objectFolder, name: d.name, subType: d.type, expectedHash: "absent", declText: d.text, expectedSolutionPath: production } }) + "\n");
     const result = await response; assert.equal(result.ok, false); assert.match(result.error, /Read-only solution/); return result;
   } finally { socket.destroy(); }
 }

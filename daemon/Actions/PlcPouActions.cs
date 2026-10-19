@@ -1380,8 +1380,6 @@ namespace Te1000Daemon
                 dynamic child = parentItem.CreateChild(name, subType, before, vInfo);
                 AssertWellFormedChild(parentItem, child, name, subType, parent);
                 if (((ITcSmTreeItem)(object)child).ItemType != subType) throw new BridgeException("CreateChild returned an unexpected PLC object type.");
-                if (subType == 623 && PouHelper.GetDeclaration((object)child).Replace("\r\n", "\n").TrimEnd() != declText.Replace("\r\n", "\n").TrimEnd())
-                    throw new BridgeException("ALIAS creation declaration differs from the documented request; inspect the new object without retrying.");
                 ctx.Session.SaveAudit.AfterObjectWrite();
                 return child;
             }
@@ -1439,8 +1437,7 @@ namespace Te1000Daemon
                     if (string.IsNullOrWhiteSpace(declText)) return null;
                     return declText;
                 case 623:
-                    if (string.IsNullOrWhiteSpace(declText)) throw new BridgeException("ALIAS declaration is required for the base type.");
-                    return new object[] { declText };
+                    throw new BridgeException("ALIAS (623) creation is disabled.");
                 default:
                     return null;
             }

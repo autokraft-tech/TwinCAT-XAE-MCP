@@ -38,6 +38,8 @@ namespace Te1000Daemon
                 }
             }
 
+            LifecycleIdentity.PipeName = pipeName;
+            LifecycleIdentity.AssertStartupSession();
             Log.Init(pipeName);
             Log.Write("Te1000Daemon starting; pipe=" + pipeName + " watch=" + watch + " autoDismiss=" + autoDismiss + " graceMs=" + graceMs);
 

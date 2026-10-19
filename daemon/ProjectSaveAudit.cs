@@ -14,6 +14,8 @@ namespace Te1000Daemon
     {
         private readonly string _root;
         private readonly string _journal;
+        private readonly string _baseline;
+        internal bool Recovered { get; private set; }
         private Dictionary<string, byte[]> _before;
         private Dictionary<string, byte[]> _last;
         private Dictionary<string, byte[]> _checkpoint;
@@ -31,7 +33,28 @@ namespace Te1000Daemon
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexPlcXaeMcp", "save-audits", Hash(Encoding.UTF8.GetBytes(_root.ToUpperInvariant())));
             Directory.CreateDirectory(dir);
             _journal = Path.Combine(dir, "pending.json");
+            _baseline = Path.Combine(dir, "baseline.json");
             if (File.Exists(_journal)) _blocked = "An unfinished or unsafe save journal exists: " + _journal + ". Inspect it; do not replay writes.";
+            else if (File.Exists(_baseline))
+            {
+                try
+                {
+                    var baseline = Json.ParseObject(File.ReadAllText(_baseline));
+                    string archive = baseline.Str("archive");
+                    if (Path.GetDirectoryName(Path.GetFullPath(archive)) != dir || Hash(File.ReadAllBytes(archive)) != baseline.Str("archiveHash"))
+                        throw new BridgeException("Recovery archive identity/hash mismatch.");
+                    var report = Json.ParseObject(File.ReadAllText(archive));
+                    var snapshot = Snapshot();
+                    if (baseline.Str("policyHash") != LifecycleIdentity.PolicyHash || baseline.Str("solution") != Path.GetFullPath(solution) ||
+                        baseline.Str("gitHead") != Git("rev-parse", "HEAD") || baseline.Str("gitStatus") != Git("status", "--porcelain=v1", "--untracked-files=all") ||
+                        baseline.Str("gitDiffHash") != Hash(Encoding.UTF8.GetBytes(Git("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--", "."))) ||
+                        report.Str("solution") != Path.GetFullPath(solution) || report.Str("state") != "completed_and_audited" || !report.Bool("safe") || !report.Bool("saved") ||
+                        Json.Write(Hashes(snapshot)) != Json.Write(report.Obj("afterHashes")))
+                        throw new BridgeException("Saved recovery baseline does not match policy, Git or engineering files.");
+                    _last = snapshot; _report = report; Recovered = true;
+                }
+                catch (Exception ex) { _blocked = "Recovery locked: " + ex.Message; }
+            }
         }
 
         public static string Hash(byte[] bytes)
@@ -100,6 +123,15 @@ namespace Te1000Daemon
             if (_blocked != null) throw new BridgeException("Save safety lock: " + _blocked);
         }
 
+        internal void AssertCanCloseOrCreate()
+        {
+            AssertUnchanged();
+            if (_before != null) throw new BridgeException("Pending edit batch; save and audit before lifecycle operation.");
+            if (_report != null && !_report.Bool("saved")) throw new BridgeException("Audited SaveAll is required after build before lifecycle operation.");
+            if (_last == null && !string.IsNullOrWhiteSpace(Git("status", "--porcelain=v1", "--untracked-files=all")))
+                throw new BridgeException("No recoverable audited baseline for dirty worktree; lifecycle operation refused.");
+        }
+
         private void AssertUnchanged()
         {
             AssertUnblocked();
@@ -126,7 +158,7 @@ namespace Te1000Daemon
 
         private static Json.JObj Hashes(Dictionary<string, byte[]> files)
         {
-            var hashes = new Json.JObj(); foreach (var file in files) hashes[file.Key] = Hash(file.Value); return hashes;
+            var hashes = new Json.JObj(); foreach (var file in files.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)) hashes[file.Key] = Hash(file.Value); return hashes;
         }
 
         public void BeforeObjectWrite(string path, bool create, int type = 604)
@@ -181,7 +213,16 @@ namespace Te1000Daemon
         private void Persist()
         {
             _report["journal"] = _journal;
-            File.WriteAllText(_journal, Json.Write(_report), new UTF8Encoding(false));
+            WriteDurable(_journal, _report);
+        }
+
+        private static void WriteDurable(string path, Json.JObj value, bool createNew = false)
+        {
+            // A pending journal is persisted before every engineering mutation.
+            // Torn records cannot validate; pending dominates any older baseline.
+            byte[] bytes = new UTF8Encoding(false).GetBytes(Json.Write(value));
+            using (var stream = new FileStream(path, createNew ? FileMode.CreateNew : FileMode.Create, FileAccess.Write, FileShare.None))
+            { stream.Write(bytes, 0, bytes.Length); stream.Flush(true); }
         }
 
         public Json.JObj Changes()
@@ -201,9 +242,13 @@ namespace Te1000Daemon
 
         public Json.JObj Report()
         {
-            if (_report != null) return _report;
+            if (_report != null)
+            {
+                var result = new Json.JObj(); foreach (var field in _report) result[field.Key] = field.Value;
+                return result.Set("blocked", _blocked != null).Set("reason", _blocked).Set("recovered", Recovered);
+            }
             if (File.Exists(_journal)) return new Json.JObj().Set("blocked", true).Set("journal", _journal).Set("reportText", File.ReadAllText(_journal));
-            return new Json.JObj().Set("state", "no_save_in_this_session");
+            return new Json.JObj().Set("state", "no_save_in_this_session").Set("blocked", _blocked != null).Set("reason", _blocked);
         }
 
         private static XDocument Xml(byte[] bytes)
@@ -357,13 +402,21 @@ namespace Te1000Daemon
                 _report["state"] = unsafeChange ? "blocked" : "completed_and_audited";
                 Persist();
                 string archive = Path.Combine(Path.GetDirectoryName(_journal), DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff") + "-" + Guid.NewGuid().ToString("N") + ".json");
-                File.Copy(_journal, archive); _report["archive"] = archive;
+                WriteDurable(archive, _report, true); _report["archive"] = archive;
                 if (unsafeChange)
                 {
                     _blocked = "Unexpected engineering metadata changed during " + operationName + ". Do not commit, publish, reload or continue writes. Inspect project_save_audit: " + _journal;
                     throw new BridgeException(_blocked);
                 }
-                File.Delete(_journal);
+                if (operationName == "File.SaveAll")
+                    WriteDurable(_baseline, new Json.JObj().Set("solution", Path.GetFullPath(OfflinePolicy.SolutionPath))
+                        .Set("policyHash", LifecycleIdentity.PolicyHash).Set("gitHead", Git("rev-parse", "HEAD"))
+                        .Set("gitStatus", Git("status", "--porcelain=v1", "--untracked-files=all"))
+                        .Set("gitDiffHash", Hash(Encoding.UTF8.GetBytes(Git("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--", "."))))
+                        .Set("archive", archive).Set("archiveHash", Hash(File.ReadAllBytes(archive))));
+                else if (File.Exists(_baseline))
+                    File.Move(_baseline, _baseline + ".pre-build-" + Guid.NewGuid().ToString("N"));
+                File.Delete(_journal); // Only the successful audited protocol retires pending.
                 _last = after; _before = null; _checkpoint = null; _expected.Clear(); _created.Clear(); _newIds.Clear(); _methods.Clear(); _newMethods.Clear();
                 return _report;
             }

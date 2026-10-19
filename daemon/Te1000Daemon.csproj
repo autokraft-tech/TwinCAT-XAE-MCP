@@ -105,6 +105,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="OfflinePolicy.cs" />
     <Compile Include="ProjectSaveAudit.cs" />
+    <Compile Include="LifecycleIdentity.cs" />
     <Compile Include="VsInterop.cs" />
     <Compile Include="Json.cs" />
     <Compile Include="Log.cs" />

@@ -51,8 +51,8 @@ function spawnDaemon() {
   if (!DIALOG_WATCH) args.push("--no-watch");
   if (!AUTO_DISMISS) args.push("--no-autodismiss");
   args.push("--grace-ms", String(GRACE_MS));
-  // Detached so the daemon outlives this MCP process restart; it self-guards as
-  // a single instance per pipe name (named mutex), so duplicate spawns are safe.
+  // Legacy autostart only. Windows hosts may terminate detached descendants;
+  // managed deployments use Task Scheduler and disable client autostart.
   const child = spawn(EXE_PATH, args, { stdio: "ignore", detached: true, windowsHide: true });
   child.on("error", (error) => console.error("Daemon spawn failed:", error.message));
   child.unref();
@@ -64,6 +64,7 @@ function attachSocket(s) {
   s.setNoDelay(true);
   s.setEncoding("utf8"); // Preserve Chinese paths split across pipe frames.
   s.on("data", (chunk) => {
+    if (sock !== s) return;
     rxBuf += chunk.toString("utf8");
     let nl;
     while ((nl = rxBuf.indexOf("\n")) >= 0) {
@@ -78,8 +79,9 @@ function attachSocket(s) {
     }
   });
   const drop = () => {
-    if (sock === s) sock = null;
-    // Fail all in-flight requests; callers may retry. Snapshot the waiters first
+    if (sock !== s) return; // A late close from an old connection cannot affect its replacement.
+    sock = null;
+    // Fail in-flight requests without replay. Snapshot the waiters first
     // (each reject() mutates `pending` via settle()).
     const waiters = Array.from(pending.values());
     pending.clear();
@@ -123,6 +125,8 @@ async function ensureConnected() {
         return s;
       } catch {
         if (!spawned) {
+          if (process.env.TE1000_DAEMON_AUTOSTART === "0")
+            throw new Error("Managed daemon unavailable; use the lifecycle start/diagnose command. No replacement was started and no request was replayed.");
           if (!daemonExeExists()) {
             throw new Error(
               "Te1000Daemon.exe not found at " + EXE_PATH +
@@ -144,10 +148,12 @@ async function ensureConnected() {
   }
 }
 
-function sendOnce(action, payload) {
+function sendOnce(action, payload, expectedSocket) {
   return new Promise(async (resolve, reject) => {
     let s;
     try { s = await ensureConnected(); } catch (e) { return reject(e); }
+    if (expectedSocket && s !== expectedSocket)
+      return reject(new Error("Managed connection changed after identity validation. No engineering action sent; inspect and reconnect explicitly."));
     const id = String(nextId++);
 
     // Per-request timer: if no matching-id response arrives within the ceiling,
@@ -212,9 +218,21 @@ function toError(action, resp) {
 // reconnect after a dropped pipe; an in-flight request is never replayed.
 
 async function runViaDaemon(action, payload = {}) {
+  let validatedSocket;
+  if (process.env.TE1000_DAEMON_AUTOSTART === "0" && action !== "daemon_identity") {
+    validatedSocket = await ensureConnected();
+    const identity = await sendOnce("daemon_identity", {}, validatedSocket);
+    const keys = ["TE1000_MCP_SOLUTION_PATH", "TE1000_WRITE_SOLUTION_PATH", "TE1000_WRITE_ROOTS", "TE1000_PLC_WRITE_TYPES", "TE1000_SESSION_MODE", "TE1000_PROGID", "TE1000_XAE_VERSION", "TE1000_PROJECT_NAME", "TE1000_PLC_ROOT"];
+    const policyHash = require("node:crypto").createHash("sha256").update(keys.map(key => key + "=" + (process.env[key] || "") + "\n").join("")).digest("hex");
+    const info = identity.result || {};
+    if (!identity.ok || info.policyHash !== policyHash || info.pipe !== PIPE_NAME ||
+        String(info.sessionId) !== process.env.TE1000_OWNER_SESSION_ID || info.userSid !== process.env.TE1000_OWNER_SID ||
+        path.resolve(info.executable || "").toLowerCase() !== path.resolve(EXE_PATH).toLowerCase())
+      throw new Error("Managed daemon identity/startup policy mismatch. No engineering action sent.");
+  }
   // A dropped response does not prove the COM action was not executed. Never
   // replay a request; the next explicit call can reconnect to the same daemon.
-  const resp = await sendOnce(action, payload);
+  const resp = await sendOnce(action, payload, validatedSocket);
   if (resp.ok) return resp.result;
   throw toError(action, resp);
 }

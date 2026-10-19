@@ -1,50 +1,28 @@
-# NexPlc XAE MCP maintenance
+# Agent maintenance rules
 
-This fork is an offline PLC source-development service. Read
-`docs/NEXPLC_XAE_MCP_VALIDATION.md` and the NexPlc section of `README.md` before
-changing session, tool or policy code.
+Read [README](README.md), [architecture](docs/ARCHITECTURE.md), [object API](docs/PLC_OBJECT_API.md), [save safety](docs/XAE_SAVE_SAFETY.md) and [lifecycle](docs/XAE_LIFECYCLE.md) before changing engineering/session behavior. Clients that do not load AGENTS.md must explicitly include these rules in their instructions.
 
-- Use the installed `nexplc_xae` MCP for NexPlc tree/code reads. Create and edit PLC
-  objects only through validated XAE Automation Interface methods. Do not resume
-  the discontinued XaeBridge.ps1 prototype.
-- Keep all COM access on the daemon's single STA. Reuse DTE and ITcSysManager;
-  never start XAE or open a solution on each request. Check exact Solution.FullName
-  and System Manager project path before work. Do not convert a busy process into
-  a second instance.
-- The daemon has a fixed offline allowlist. Do not re-enable runtime download,
-  online change, login/logout, activation/restart, ADS writes, device control,
-  arbitrary DTE commands, XML writes, deletes, moves, renames or dialog clicks.
-  Confirmation strings cannot override these restrictions.
-- ST FB creation (604, language 1) and direct-FB ST Method creation (609) plus
-  declaration/implementation updates have been validated locally. Methods need
-  startup `TE1000_PLC_WRITE_TYPES=604;609` and an expected content hash for edits.
-  STRUCT (606), ENUM (605), and GVL (615) independently passed create/edit,
-  audited save/reload, stable GUID/reference and offline-build acceptance. They
-  require explicit startup type permissions and expectedHash (absent on create).
-  ALIAS (623) remains hard-disabled after one isolated candidate failed. Preserve
-  both ALIAS locked sessions/journals; never replay their CreateChild calls.
-  Never synthesize TcPOU/project XML or GUIDs.
-- The installed formal NexPlc session is read-only. All write validation must use
-  an isolated worktree with startup-pinned TE1000_WRITE_SOLUTION_PATH and narrowly
-  scoped TE1000_WRITE_ROOTS. Existing FB writes must preserve object name and GUID.
-  SPT V4 libraries/framework files must never be modified.
-- A pipe drop, timeout or modal can leave a write's outcome unknown. Do not replay
-  it. Inspect actual state first; the worker fails closed. Never auto-answer dialogs.
-- Preserve user-owned XAE instances. Shutdown may close only a known daemon-owned
-  instance with the pinned solution and no unsaved projects/documents.
-- Do not commit, push, merge or create a PR without the user's explicit request.
+## Engineering
 
-Verification after code changes: build the daemon, run `npm run check`, `npm test`,
-`npm run test:offline`, and `node daemon/test-ping.js`. Live tests are opt-in;
-follow the report's isolated-worktree instructions. Stop after the requested
-validation; do not change NexPlc application behavior.
+- Prefer validated XAE MCP tools. Never synthesize `.TcPOU`, `.TcDUT`, `.TcGVL`, `.plcproj` XML or GUIDs to bypass XAE. XML inspection is read-only.
+- Production is read-only. Writes require an explicitly authorized isolated linked Worktree, separate Dev EXE/pipe and startup-pinned Solution, object roots and types. Verify exact Solution/System Manager and paths; clients cannot enlarge permissions.
+- Supported writes: ST FB 604, direct-FB ST Method 609, STRUCT 606, ENUM 605, GVL 615. Method folder writes are unvalidated. ALIAS 623 is hard-disabled; preserve failed worktrees/journals and never replay calls.
+- Keep COM on one STA, reuse DTE/System Manager, never start XAE/open Solution per request. Preserve user-owned instances.
+- Never Download, Online Change, Login/Logout, Run, Stop, Reset, activate configuration, restart runtime, write ADS/device outputs, execute arbitrary DTE commands, click dialogs, delete/move/rename objects or change third-party libraries. Confirmation strings cannot override policy.
 
-Phase 2 development: read `docs/NEXPLC_XAE_MCP_PHASE2_REPORT.md` and
-`docs/XAE_SAVE_SAFETY.md`. All reachable save paths must use the daemon's
-`SaveAudited`; CreateChild can materialize a TcPOU before SaveAll, so audit after
-each object mutation as well. Never clear a pending/blocked journal to retry.
-Keep the affected worktree and its XAE state for inspection; use a fresh worktree
-for recovery. A post-save audit is not transactional rollback. Do not proceed to
-Method/DUT/GVL or dual-environment acceptance until the P1 gate has passed.
-While production holds the Release EXE, build to a separate `-OutputPath` and set
-`TE1000_DAEMON_EXE` only in the development/test client's startup environment.
+## Save and recovery
+
+- Read code first. Use full-content hashes for Method/DUT/GVL updates; prefer them for FB too. Preserve identity.
+- All save paths including implicit reload saves use `SaveAudited`. CreateChild can write before SaveAll; audit mutations too.
+- After writes check code, GUID, unique Compile references, configuration differences, save audit and full Git Diff. Reload the isolated solution and run necessary offline compilation; inspect diagnostics and audit again.
+- Lost responses/timeouts can leave writes unknown. Never auto-retry, replace a stuck worker, launch a second XAE or delete/modify journals, leases or baselines to bypass validation. Stop writes and inspect actual state.
+- Recovery requires matching persistent audit, files, policy and owned instance. Audit is not rollback or a power-loss transaction. Preserve pending/executing/blocked evidence.
+- Stop only a verified owned instance after saved-state and audit checks; no force-kill or Task.End bypass.
+
+## Repository work
+
+Keep Node MCP + C# Daemon architecture and protocol/configuration compatibility. Make surgical changes and test changed safety behavior. Build to independent output directories; do not replace installed EXEs/configs or restart live instances without deployment authorization.
+
+Run `npm run check`, `npm test`, `npm run test:offline`, `node daemon/test-ping.js`, independent Release/x64 build and `git diff --check`. Live tests are opt-in and require explicit isolated-worktree authorization. Offline fixtures do not prove COM behavior.
+
+Do not commit PLC snapshots, logs, journals, local profiles, user config, credentials or binaries. Preserve history and local evidence. Commit/push/PR/merge require explicit user authorization; integration never implies deployment.

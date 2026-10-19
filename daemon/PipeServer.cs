@@ -5,6 +5,8 @@ using System.Text;
 using System.Threading;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Te1000Daemon
 {
@@ -18,6 +20,8 @@ namespace Te1000Daemon
         private readonly Dispatcher _dispatcher;
         private volatile bool _stop;
         private NamedPipeServerStream _listening;
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetNamedPipeClientProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint pid);
 
         public PipeServer(string pipeName, Dispatcher dispatcher)
         {
@@ -44,6 +48,10 @@ namespace Te1000Daemon
                         PipeOptions.Asynchronous, 65536, 65536, security);
                     Interlocked.Exchange(ref _listening, server);
                     server.WaitForConnection();
+                    uint clientPid;
+                    if (!GetNamedPipeClientProcessId(server.SafePipeHandle, out clientPid)) throw new BridgeException("Cannot identify pipe client.");
+                    using (var client = Process.GetProcessById((int)clientPid))
+                        if (client.SessionId != LifecycleIdentity.SessionId) throw new BridgeException("Cross-session pipe client rejected.");
                     Interlocked.CompareExchange(ref _listening, null, server);
                     var conn = server;
                     var t = new Thread(() => ServeConnection(conn)) { IsBackground = true, Name = "te1000-pipe-conn" };

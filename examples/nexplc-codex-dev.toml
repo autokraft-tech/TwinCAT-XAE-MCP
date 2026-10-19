@@ -1,22 +1,25 @@
-# Development only. Production nexplc_xae stays unchanged.
+# Disabled template. Replace placeholders before enabling.
 [mcp_servers.nexplc_xae_dev]
-enabled = true
-command = 'C:\Program Files\nodejs\node.exe'
-args = ['D:\Will\Documents\source\repos\TwinCAT-XAE-MCP\index.js']
+enabled = false
+command = '<NODE_EXE>'
+args = ['<MCP_REPOSITORY>\index.js']
 startup_timeout_sec = 30
 tool_timeout_sec = 240
 
 [mcp_servers.nexplc_xae_dev.env]
-TE1000_DAEMON_EXE = 'D:\Will\Documents\source\repos\TwinCAT-XAE-MCP\daemon\bin\NexPlcDev20261019\Te1000Daemon.exe'
-TE1000_DAEMON_PIPE = 'nexplc-dev-20261019-final'
+TE1000_DAEMON_EXE = '<DAEMON_EXE>'
+TE1000_DAEMON_PIPE = 'nexplc-p4-dev-example'
 TE1000_SESSION_MODE = 'createOnce'
 TE1000_PROGID = 'TcXaeShell.DTE.17.0'
 TE1000_XAE_VERSION = '3.1.4026.20'
-TE1000_MCP_SOLUTION_PATH = 'D:\Will\Documents\source\repos\NexPlc-mcp-dev-final\MySPT_Machine\MySPT_Machine.sln'
-TE1000_WRITE_SOLUTION_PATH = 'D:\Will\Documents\source\repos\NexPlc-mcp-dev-final\MySPT_Machine\MySPT_Machine.sln'
-TE1000_WRITE_ROOTS = 'TIPC^MainPLC^MainPLC项目^03_POUs^FB_MCP_Dev;TIPC^MainPLC^MainPLC项目^01_DUTs^ST_MCP_Dev;TIPC^MainPLC^MainPLC项目^01_DUTs^E_MCP_Dev;TIPC^MainPLC^MainPLC项目^04_GVLs^GVL_MCP_Dev'
-TE1000_PLC_WRITE_TYPES = '604;609;605;606;615'
-TE1000_PROJECT_NAME = 'MySPT_Machine'
-TE1000_PLC_ROOT = 'TIPC^MainPLC^MainPLC项目'
+TE1000_MCP_SOLUTION_PATH = '<SOLUTION>'
+TE1000_PROJECT_NAME = '<SYSTEM_MANAGER_PROJECT>'
+TE1000_PLC_ROOT = '<PLC_ROOT>'
 TE1000_DIALOG_AUTODISMISS = '0'
-TE1000_DAEMON_LOG = 'D:\Will\Documents\source\repos\TwinCAT-XAE-MCP\artifacts\p2-resume-20261019\p3-dev-daemon.log'
+TE1000_DAEMON_AUTOSTART = '0'
+TE1000_OWNER_SID = '<PROFILE_USER_SID>'
+TE1000_OWNER_SESSION_ID = '<PROFILE_SESSION_ID>'
+TE1000_WRITE_SOLUTION_PATH = '<SOLUTION>'
+TE1000_WRITE_ROOTS = '<PLC_ROOT>^03_POUs^FB_Example;<PLC_ROOT>^01_DUTs^ST_Example;<PLC_ROOT>^01_DUTs^E_Example;<PLC_ROOT>^04_GVLs^GVL_Example'
+TE1000_PLC_WRITE_TYPES = '604;609;606;605;615'
+TE1000_DAEMON_LOG = '<LOCAL_LOG_PATH>'

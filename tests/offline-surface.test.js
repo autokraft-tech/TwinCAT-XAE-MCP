@@ -19,10 +19,11 @@ const { McpClient } = require("./mcp-client");
       ["tc_tree", { action: "set_xml", path: "TIPC", xml: "<x/>" }],
       ["xae", { action: "dialog_resolve", button: "OK" }],
       ["xae_build", { action: "rebuild" }],
+      ["plc_pou", { action: "create", parent: "TIPC^MainPLC^MainPLC项目^01_DUTs", name: "T_Forbidden", subType: 623, expectedHash: "absent" }],
     ]) {
       const response = await client.request("tools/call", { name, arguments: args }, 10000);
       assert.ok(response.error || response.result?.isError, `${name} ${args.action || ""} must be rejected before COM`);
     }
-    console.log("offline MCP surface checks passed (4 production / 8 development tools; 6 forbidden calls rejected)");
+    console.log("offline MCP surface checks passed (4 production / 8 development tools; 7 forbidden calls rejected including ALIAS)");
   } finally { client.close(); readonly.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

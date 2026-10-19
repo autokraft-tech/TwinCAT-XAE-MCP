@@ -62,7 +62,7 @@ internal static class ProjectSaveAuditTests
     public static int Main()
     {
         try { return Tests(); }
-        catch (Exception ex) { Console.Error.WriteLine(ex.GetType().Name + ": " + ex.Message); return 1; }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
     private static int Tests()
     {
@@ -140,6 +140,52 @@ internal static class ProjectSaveAuditTests
             Check(audit.Save(() => Write("MainPLC/MainPLC.plcproj", "<Project><PropertyGroup><ProjectGuid>plc-guid</ProjectGuid></PropertyGroup><ItemGroup><Compile Include='03_POUs\\FB_Test.TcPOU'/><Compile Include='04_GVLs\\GVL_New.TcGVL'><LinkAlways>true</LinkAlways></Compile></ItemGroup></Project>")).Bool("safe"), "GVL GUID and unique reference with LinkAlways must pass");
             audit.BeforeObjectWrite(OfflinePolicy.PlcRoot + "^04_GVLs^GVL_New", false, 615);
             Reject(() => audit.Save(() => Write("MainPLC/04_GVLs/GVL_New.TcGVL", gvl.Replace("33333333", "44444444"))), "GVL GUID change must lock");
+        });
+        Run(audit => {
+            Begin(audit);
+            audit.Save(() => Write("MainPLC/03_POUs/FB_Test.TcPOU", Pou.Replace("value := 1", "value := 2")));
+            var recovered = new ProjectSaveAudit(OfflinePolicy.SolutionPath);
+            Check(recovered.Recovered, "completed audited save must recover with exact disk and Git state");
+            Check(recovered.Report().Bool("recovered"), "recovered report must identify recovery");
+            Begin(recovered);
+            Check(recovered.Save(() => Write("MainPLC/03_POUs/FB_Test.TcPOU", Pou.Replace("value := 1", "value := 3"))).Bool("safe"), "recovered uncommitted worktree must support audited editing");
+        });
+        Run(audit => {
+            Begin(audit); audit.Save(() => Write("MainPLC/03_POUs/FB_Test.TcPOU", Pou.Replace("value := 1", "value := 2")));
+            Write("fixture.tsproj", Project.Replace("project-guid", "external-guid"));
+            Reject(() => new ProjectSaveAudit(OfflinePolicy.SolutionPath).AssertUnblocked(), "disk divergence must lock recovery");
+        });
+        Run(audit => {
+            Begin(audit); audit.Save(() => { });
+            Environment.SetEnvironmentVariable("TE1000_WRITE_ROOTS", "changed-policy");
+            try { Reject(() => new ProjectSaveAudit(OfflinePolicy.SolutionPath).AssertUnblocked(), "startup scope divergence must lock recovery"); }
+            finally { Environment.SetEnvironmentVariable("TE1000_WRITE_ROOTS", null); }
+        });
+        Run(audit => {
+            Begin(audit); audit.Save(() => { }); Begin(audit);
+            Reject(() => new ProjectSaveAudit(OfflinePolicy.SolutionPath).AssertUnblocked(), "pending journal must dominate older completed baseline");
+            Reject(() => audit.AssertCanCloseOrCreate(), "unsaved edits must block lifecycle stop/create");
+        });
+        Run(audit => {
+            Begin(audit); var saved = audit.Save(() => { });
+            File.AppendAllText(saved.Str("archive"), "corruption");
+            Reject(() => new ProjectSaveAudit(OfflinePolicy.SolutionPath).AssertUnblocked(), "altered immutable archive must lock recovery");
+        });
+        Run(audit => {
+            Begin(audit); var saved = audit.Save(() => Write("MainPLC/03_POUs/FB_Test.TcPOU", Pou.Replace("value := 1", "value := 2")));
+            string baseline = Path.Combine(Path.GetDirectoryName(saved.Str("archive")), "baseline.json");
+            File.Move(baseline, baseline + ".fixture-missing");
+            var restarted = new ProjectSaveAudit(OfflinePolicy.SolutionPath);
+            Check(!restarted.Recovered, "saved without baseline is not recovered");
+            Reject(() => Begin(restarted), "saved dirty files without baseline must not be adopted");
+            Reject(() => restarted.AssertCanCloseOrCreate(), "no baseline must block lifecycle creation on dirty files");
+        });
+        Run(audit => {
+            Begin(audit); audit.Save(() => Write("MainPLC/03_POUs/FB_Test.TcPOU", Pou.Replace("value := 1", "value := 2")));
+            audit.Build(() => { });
+            var restarted = new ProjectSaveAudit(OfflinePolicy.SolutionPath);
+            Check(!restarted.Recovered, "build does not establish a saved recovery baseline");
+            Reject(() => Begin(restarted), "build requires subsequent audited SaveAll before restart editing");
         });
         Console.WriteLine("save audit fixture tests passed (" + _checks + " checks; no COM or PLC files accessed)");
         return 0;

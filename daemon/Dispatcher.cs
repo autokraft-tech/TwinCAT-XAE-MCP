@@ -67,8 +67,17 @@ namespace Te1000Daemon
             string action = request.Str("action");
 
             // ---- COM-free actions -------------------------------------------
+            if (action == "daemon_identity")
+            {
+                resp["ok"] = true;
+                resp["result"] = LifecycleIdentity.Info();
+                return resp;
+            }
             if (action == "daemon_shutdown")
             {
+                var stopPayload = request.Obj("payload") ?? new Json.JObj();
+                if (stopPayload.Str("expectedSolutionPath") != null && !OfflinePolicy.SamePath(stopPayload.Str("expectedSolutionPath"), OfflinePolicy.SolutionPath))
+                    return resp.Set("ok", false).Set("error", "Shutdown solution identity mismatch.");
                 // Operator lifecycle control, deliberately absent from MCP tools.
                 var stopped = _worker.Run(delegate
                 {
@@ -170,7 +179,7 @@ namespace Te1000Daemon
             {
                 var ctx = new ActionContext(action, payload, _worker.Session, _cache, _edits);
                 ctx.Dte(); // Exact Solution.FullName validation on the owning STA.
-                if (action == "xae_solution_build") _worker.Session.SaveAudit.AssertUnblocked();
+                if (action == "xae_solution_build") _worker.Session.AssertRecoveredSaved();
                 _cache.Clear(); // Never carry RCWs or cached code across session changes.
                 Json.JObj data = handler(ctx);
                 if (data != null) data["session"] = _worker.Session.Info();

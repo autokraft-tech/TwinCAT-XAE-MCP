@@ -1,18 +1,20 @@
-# Local offline configuration. Paths reflect the validated machine.
+# Disabled template. Replace placeholders before enabling.
 [mcp_servers.nexplc_xae]
-command = 'C:\Program Files\nodejs\node.exe'
-args = ['D:\Will\Documents\source\repos\TwinCAT-XAE-MCP\index.js']
+enabled = false
+command = '<NODE_EXE>'
+args = ['<MCP_REPOSITORY>\index.js']
 startup_timeout_sec = 30
 tool_timeout_sec = 240
 
 [mcp_servers.nexplc_xae.env]
-TE1000_DAEMON_PIPE = 'nexplc-readonly-validation'
+TE1000_DAEMON_EXE = '<DAEMON_EXE>'
+TE1000_DAEMON_PIPE = 'nexplc-readonly-example'
 TE1000_SESSION_MODE = 'createOnce'
 TE1000_PROGID = 'TcXaeShell.DTE.17.0'
 TE1000_XAE_VERSION = '3.1.4026.20'
-TE1000_MCP_SOLUTION_PATH = 'D:\Will\Documents\source\repos\NexPlc\MySPT_Machine\MySPT_Machine.sln'
-TE1000_PROJECT_NAME = 'MySPT_Machine'
-TE1000_PLC_ROOT = 'TIPC^MainPLC^MainPLC项目'
+TE1000_MCP_SOLUTION_PATH = '<SOLUTION>'
+TE1000_PROJECT_NAME = '<SYSTEM_MANAGER_PROJECT>'
+TE1000_PLC_ROOT = '<PLC_ROOT>'
 TE1000_DIALOG_AUTODISMISS = '0'
 TE1000_WRITE_SOLUTION_PATH = ''
 TE1000_WRITE_ROOTS = ''

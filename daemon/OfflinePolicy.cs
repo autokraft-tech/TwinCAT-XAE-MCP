@@ -90,8 +90,6 @@ namespace Te1000Daemon
                     if (p.Has("language") && (p["language"] is string || p.Str("language") != "1")) throw new BridgeException("Only integer ST language 1 is enabled.");
                     if (p.Int("subType") == 609 && (p.Str("expectedHash") != "absent" || !Regex.IsMatch(p.Str("returnType") ?? "", @"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")))
                         throw new BridgeException("Method creation requires expectedHash=absent and a PLC return type.");
-                    if (p.Int("subType") == 623 && (p.Str("expectedHash") != "absent" || !Regex.IsMatch(p.Str("declText") ?? "", @"(?i)\A\s*TYPE\s+" + Regex.Escape(p.Str("name")) + @"\s*:\s*DINT\s*;\s*END_TYPE\s*\z")))
-                        throw new BridgeException("ALIAS creation requires expectedHash=absent and a complete matching DINT alias declaration.");
                     if (p.Int("subType") != 604 && p.Int("subType") != 609 && p.Int("subType") != 623 && (p.Str("expectedHash") != "absent" || p.Has("declText")))
                         throw new BridgeException("DUT creation requires expectedHash=absent; set its declaration separately with a content hash.");
                     path = p.Str("parent") + "^" + p.Str("name");
