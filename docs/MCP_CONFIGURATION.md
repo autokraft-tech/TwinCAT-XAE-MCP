@@ -1,5 +1,7 @@
 # MCP 安装与配置
 
+单目录模式 Dev Profile 另固定 TE1000_GIT_WORKFLOW=single-checkout、TE1000_GIT_CHECKOUT、TE1000_GIT_BRANCH、TE1000_GIT_HEAD，并将其纳入前端/Daemon/生命周期策略指纹。复制完整生成配置，不手写扩权。真实验收状态见 [流程](DEVELOPMENT_WORKFLOW.md)。
+
 构建要求见 [README](../README.md)。本机 stdio Node MCP 连接 Named Pipe Daemon，无需网络监听或任意命令入口。
 
 ## 客户端

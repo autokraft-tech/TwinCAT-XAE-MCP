@@ -104,6 +104,7 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="OfflinePolicy.cs" />
+    <Compile Include="GitCheckout.cs" />
     <Compile Include="MethodTarget.cs" />
     <Compile Include="ProjectSaveAudit.cs" />
     <Compile Include="LifecycleIdentity.cs" />

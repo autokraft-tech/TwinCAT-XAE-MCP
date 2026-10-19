@@ -30,12 +30,18 @@ namespace Te1000Daemon
         public ProjectSaveAudit(string solution)
         {
             _root = Path.GetDirectoryName(Path.GetFullPath(solution));
-            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexPlcXaeMcp", "save-audits", Hash(Encoding.UTF8.GetBytes(_root.ToUpperInvariant())));
+            string dir = LifecycleIdentity.AuditDirectory(_root);
             Directory.CreateDirectory(dir);
             _journal = Path.Combine(dir, "pending.json");
             _baseline = Path.Combine(dir, "baseline.json");
+            if (Environment.GetEnvironmentVariable("TE1000_GIT_WORKFLOW") == "single-checkout")
+            {
+                string parent = Directory.GetParent(Directory.GetParent(dir).FullName).FullName;
+                if (Directory.GetFiles(parent, "pending.json", SearchOption.AllDirectories).Length != 0)
+                    _blocked = "An unfinished or unsafe save journal exists in this solution's session history; preserve and diagnose.";
+            }
             if (File.Exists(_journal)) _blocked = "An unfinished or unsafe save journal exists: " + _journal + ". Inspect it; do not replay writes.";
-            else if (File.Exists(_baseline))
+            else if (_blocked == null && File.Exists(_baseline))
             {
                 try
                 {

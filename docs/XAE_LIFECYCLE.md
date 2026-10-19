@@ -1,14 +1,16 @@
 # Daemon 生命周期
 
+固定主 checkout 允许精确授权的非 main 分支。正常审计关闭后才允许 commit/switch，并以新 Profile 重授权。任何 XAE 运行时 switch-branch.ps1 保守拒绝切换；发现同 Solution 已打开时不创建第二个实例。未知或旧格式租约不自动迁移，见 [流程](DEVELOPMENT_WORKFLOW.md)。
+
 managed Dev 使用当前用户交互计划任务，独立于客户端持有 Daemon/XAE。正式 nexplc_xae 保持只读；脚本不管理或升级正式 Release。
 
 ## 配置
 
-从已知提交建立干净 linked Worktree，构建独立 Dev EXE，再用 new-dev-profile.ps1 生成 Profile，见 [开发流程](DEVELOPMENT_WORKFLOW.md)。生成器不安装/启动任务、不改 MCP。
+在固定 checkout 从 main 建立普通非 main 分支，保持工作区干净，构建独立 Dev EXE，再用 new-dev-profile.ps1 生成 Profile，见 [开发流程](DEVELOPMENT_WORKFLOW.md)。生成器不安装/启动任务、不改 MCP。
 
 Profile 固定 SID/session、EXE、pipe、Solution、对象/类型和日志，UTF-8 支持中文路径。实际配置留在 ignored artifacts，不提交。新权限使用新干净任务，客户端不能扩权。
 
-helper 针对已验收的 MySPT_Machine/MySPT_Machine.sln 布局及 PLC 根，拒绝主 checkout、脏副本、覆盖 Profile、目录级授权和 623。深层 Method 授权须匹配已有 FB 文件中的 FolderPath 和方法；启动前复核同一对象，不能授权整棵 POUs。任务前缀 NexPlcXae-Dev-、管道前缀 nexplc-p4-dev- 是保留兼容协议，不随文档整理改名。
+helper 针对已验收的 MySPT_Machine/MySPT_Machine.sln 布局及 PLC 根，拒绝未授权或 main 分支、脏副本、覆盖 Profile、目录级授权和 623。深层 Method 授权须匹配已有 FB 文件中的 FolderPath 和方法；启动前复核同一对象，不能授权整棵 POUs。任务前缀 NexPlcXae-Dev-、管道前缀 nexplc-p4-dev- 是保留兼容协议，不随文档整理改名。
 
 ## 命令
 
@@ -46,3 +48,9 @@ stop 核对 PID/启动时间、EXE、SID/session、Solution、pipe、策略和 o
 同一登录会话多次 CLI 复用、正常停止/显式重启、已保存状态失效重附加已实测。注销/重新登录、开机登录触发、真实另一用户/会话尝试尚未实测。session 固定可能拒绝新登录，不把 AtLogon 配置能力称为跨登录验收；注销后 XAE 存活无保证。
 
 旧二进制/租约迁移需单独评估，不自动迁移旧所有权记录，不借提交替换生产。恢复规则见 [保存安全](XAE_SAVE_SAFETY.md)。
+
+## Normal handoff and identity drift
+
+A closed lease may transfer to another pipe only when its user/session/Solution match and its recorded XAE process is no longer alive. An active lease still requires its original pipe and cannot be taken over. Each role opens a fresh owned XAE; no in-memory engineering objects cross the handoff.
+
+Git identity drift blocks engineering reads/writes/saves/builds. Normal stop remains available only for the matching owned process and Solution, with unchanged audited engineering files, no pending edit/build/unknown result, and all Saved flags true. It closes without saving; it cannot repair or clear a lock. The lifecycle client verifies ownership without a Git-blocked engineering request, then waits for both daemon and scheduler host exit before returning. A failed/unknown stop is never replayed automatically.

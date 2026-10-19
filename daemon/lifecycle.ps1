@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'task-definition.ps1')
 . (Join-Path $PSScriptRoot 'write-root-validation.ps1')
+. (Join-Path $PSScriptRoot 'git-checkout.ps1')
 $Profile = (Resolve-Path -LiteralPath $Profile).Path
 $settings = Get-Content -LiteralPath $Profile -Raw -Encoding UTF8 | ConvertFrom-Json
 $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -30,9 +31,13 @@ $commonGit = & git -C ([IO.Path]::GetDirectoryName($solution)) rev-parse --path-
 if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFileName([string]$commonGit) -ne '.git') { throw 'Cannot identify the protected primary checkout.' }
 $productionRoot = Split-Path -Parent ([IO.Path]::GetFullPath([string]$commonGit))
 $production = Join-Path $productionRoot 'MySPT_Machine\MySPT_Machine.sln'
-if ($solution -eq $production -or $binary -like '*\bin\Release\*') { throw 'Lifecycle commands cannot manage production.' }
+if ($binary -like '*\bin\Release\*') { throw 'Lifecycle commands cannot manage production binaries.' }
+if ($envMap.TE1000_GIT_WORKFLOW) {
+    if ($Action -notin @('status','diagnose','stop')) { Assert-XaeGitProfile $envMap }
+}
+elseif ($solution -eq $production) { throw 'The primary checkout requires explicit single-checkout branch authorization.' }
 foreach ($root in $envMap.TE1000_WRITE_ROOTS.Split(';')) {
-    Assert-XaeWriteRoot $root $envMap.TE1000_PLC_ROOT $solution
+    if ($Action -ne 'stop') { Assert-XaeWriteRoot $root $envMap.TE1000_PLC_ROOT $solution }
 }
 if ($envMap.TE1000_PLC_WRITE_TYPES -notmatch '^(604|609|605|606|615)(;(604|609|605|606|615))*$') { throw 'Unsupported startup write type.' }
 function Get-Sha([string]$Text) {
@@ -44,8 +49,18 @@ $policyText = ''
 foreach ($key in @('TE1000_MCP_SOLUTION_PATH','TE1000_WRITE_SOLUTION_PATH','TE1000_WRITE_ROOTS','TE1000_PLC_WRITE_TYPES','TE1000_SESSION_MODE','TE1000_PROGID','TE1000_XAE_VERSION','TE1000_PROJECT_NAME','TE1000_PLC_ROOT')) {
     $policyText += $key + '=' + $envMap[$key] + "`n"
 }
+if ($envMap.TE1000_GIT_WORKFLOW) {
+    foreach ($key in @('TE1000_GIT_WORKFLOW','TE1000_GIT_CHECKOUT','TE1000_GIT_BRANCH','TE1000_GIT_HEAD')) { $policyText += $key + '=' + $envMap[$key] + "`n" }
+}
 $policyHash = Get-Sha $policyText
 $journalDir = Join-Path $env:LOCALAPPDATA ('NexPlcXaeMcp\save-audits\' + (Get-Sha ([IO.Path]::GetDirectoryName($solution).ToUpperInvariant())))
+$journalHistory = $journalDir
+if ($envMap.TE1000_GIT_WORKFLOW) { $journalDir = Join-Path $journalDir ('sessions\' + $policyHash) }
+function Assert-NoPendingHistory {
+    if (Test-Path -LiteralPath $journalHistory) {
+        if (@(Get-ChildItem -LiteralPath $journalHistory -Filter pending.json -File -Recurse).Count) { throw 'Pending journal in solution history blocks startup. Preserve and diagnose.' }
+    }
+}
 $lease = Join-Path $env:LOCALAPPDATA ('NexPlcXaeMcp\' + (Get-Sha ($solution.ToUpperInvariant())).ToUpperInvariant() + '.lease')
 function Invoke-Rpc([string]$Name, $Payload = @{}, [int]$TimeoutMs = 20000) {
     $socket = New-Object IO.Pipes.NamedPipeClientStream('.', $pipeName, [IO.Pipes.PipeDirection]::InOut)
@@ -82,6 +97,16 @@ function Assert-Lease($Status) {
         $fields[2] -ne [string]$currentSession -or $fields[3] -ne $currentSid -or $fields[4] -ne $pipeName -or
         $fields[5] -ne $solution -or $fields[6] -ne 'owned' -or $process.SessionId -ne $currentSession -or
         $Status.solution.fullName -ne $solution -or -not $Status.session.owned) { throw 'XAE ownership lease mismatch.' }
+}
+function Assert-StopLease {
+    $fields = [IO.File]::ReadAllLines($lease)
+    if ($fields.Count -ne 7 -or $fields[2] -ne [string]$currentSession -or $fields[3] -ne $currentSid -or
+        $fields[4] -ne $pipeName -or $fields[5] -ne $solution -or $fields[6] -ne 'owned') { throw 'XAE ownership lease mismatch.' }
+    $process = Get-Process -Id ([int]$fields[0])
+    if ($process.ProcessName -ne 'TcXaeShell' -or $process.SessionId -ne $currentSession -or
+        $process.StartTime.ToUniversalTime().Ticks.ToString() -ne $fields[1]) { throw 'Owned XAE process identity mismatch.' }
+    # daemon_shutdown checks the cached owned PID, exact Solution, audit and Saved
+    # flags on the STA. Do not issue an engineering query blocked by Git drift.
 }
 $scheduler = New-Object -ComObject 'Schedule.Service'
 $scheduler.Connect()
@@ -120,6 +145,7 @@ if ($Action -eq 'diagnose') {
     exit
 }
 if ($Action -eq 'host') {
+    Assert-NoPendingHistory
     if (Test-Path -LiteralPath (Join-Path $journalDir 'pending.json')) { throw 'Pending journal blocks startup. Preserve and diagnose.' }
     foreach ($key in @(Get-ChildItem Env:TE1000_* | Select-Object -ExpandProperty Name)) { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
     foreach ($key in $envMap.Keys) { [Environment]::SetEnvironmentVariable($key, $envMap[$key], 'Process') }
@@ -129,6 +155,7 @@ if ($Action -eq 'host') {
     exit $daemonProcess.ExitCode
 }
 if ($Action -eq 'start') {
+    Assert-NoPendingHistory
     if (Test-Path -LiteralPath (Join-Path $journalDir 'pending.json')) { throw 'Pending journal blocks startup. Preserve and diagnose.' }
     $task = $folder.GetTask($settings.taskName)
     $taskUser = $task.Definition.Principal.UserId
@@ -158,8 +185,16 @@ if ($Action -eq 'status') {
     exit
 }
 if ($Action -eq 'stop') {
-    $status = Invoke-Rpc 'xae_status' @{expectedSolutionPath=$solution}
-    Assert-Lease $status
+    Assert-StopLease
     $result = Invoke-Rpc 'daemon_shutdown' @{expectedSolutionPath=$solution}
+    $daemon = Get-Process -Id $identity.daemonPid -ErrorAction SilentlyContinue
+    if ($daemon) {
+        if ($daemon.StartTime.ToUniversalTime().Ticks.ToString() -ne $identity.daemonStartTicks -or
+            -not $daemon.WaitForExit(10000)) { throw 'Daemon exit not confirmed; diagnose before any restart.' }
+    }
+    $task = $folder.GetTask($settings.taskName)
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ($task.State -eq 4 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    if ($task.State -eq 4) { throw 'Scheduler host exit not confirmed; no automatic restart.' }
     $result | ConvertTo-Json -Depth 10
 }

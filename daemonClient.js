@@ -223,6 +223,7 @@ async function runViaDaemon(action, payload = {}) {
     validatedSocket = await ensureConnected();
     const identity = await sendOnce("daemon_identity", {}, validatedSocket);
     const keys = ["TE1000_MCP_SOLUTION_PATH", "TE1000_WRITE_SOLUTION_PATH", "TE1000_WRITE_ROOTS", "TE1000_PLC_WRITE_TYPES", "TE1000_SESSION_MODE", "TE1000_PROGID", "TE1000_XAE_VERSION", "TE1000_PROJECT_NAME", "TE1000_PLC_ROOT"];
+    if (process.env.TE1000_GIT_WORKFLOW) keys.push("TE1000_GIT_WORKFLOW", "TE1000_GIT_CHECKOUT", "TE1000_GIT_BRANCH", "TE1000_GIT_HEAD");
     const policyHash = require("node:crypto").createHash("sha256").update(keys.map(key => key + "=" + (process.env[key] || "") + "\n").join("")).digest("hex");
     const info = identity.result || {};
     if (!identity.ok || info.policyHash !== policyHash || info.pipe !== PIPE_NAME ||

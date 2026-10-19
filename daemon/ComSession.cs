@@ -35,13 +35,20 @@ namespace Te1000Daemon
         internal ProjectSaveAudit SaveAudit { get { return _saveAudit ?? (_saveAudit = new ProjectSaveAudit(OfflinePolicy.SolutionPath)); } }
         internal void BeforeObjectWrite(string path, bool create, int type = 604, string methodOwner = null)
         {
+            GitCheckout.AssertPinned();
             AssertRecoveredSaved();
             foreach (dynamic document in _dte.Documents)
                 if (!(bool)document.Saved) throw new BridgeException("Unsaved editor document detected; preserve user edits before MCP writes.");
             SaveAudit.BeforeObjectWrite(path, create, type, methodOwner);
         }
+        internal void AfterObjectWrite()
+        {
+            GitCheckout.AssertPinned();
+            SaveAudit.AfterObjectWrite();
+        }
         internal Json.JObj SaveAudited()
         {
+            GitCheckout.AssertPinned();
             AssertSolution();
             AssertRecoveredSaved();
             string root = Path.GetDirectoryName(Path.GetFullPath(OfflinePolicy.SolutionPath)) + Path.DirectorySeparatorChar;
@@ -51,7 +58,7 @@ namespace Te1000Daemon
             foreach (dynamic document in _dte.Documents)
                 if (!(bool)document.Saved)
                     throw new BridgeException("Unsaved editor document detected; SaveAll could overwrite user edits. Save refused.");
-            return SaveAudit.Save(delegate { _dte.ExecuteCommand("File.SaveAll"); });
+            return SaveAudit.Save(delegate { GitCheckout.AssertPinned(); _dte.ExecuteCommand("File.SaveAll"); GitCheckout.AssertPinned(); });
         }
         internal void AssertRecoveredSaved()
         {
@@ -65,7 +72,9 @@ namespace Te1000Daemon
         {
             if (OfflinePolicy.SamePath(OfflinePolicy.SolutionPath, OfflinePolicy.WriteSolutionPath)) SaveAudit.AssertCanCloseOrCreate();
             if (_dte == null || !_owned || !ProcessAlive()) return false;
-            AssertSolution();
+            // Git drift forbids engineering operations, but must not prevent a
+            // saved, unchanged owned instance from closing without saving.
+            AssertSolutionPath();
             AssertSaved();
             _dte.Solution.Close(false);
             _dte.Quit();
@@ -122,6 +131,12 @@ namespace Te1000Daemon
 
         public void AssertSolution()
         {
+            GitCheckout.AssertPinned();
+            AssertSolutionPath();
+        }
+
+        private void AssertSolutionPath()
+        {
             string actual = (string)_dte.Solution.FullName;
             if (!OfflinePolicy.SamePath(actual, OfflinePolicy.SolutionPath))
                 throw new BridgeException("Wrong solution; expected '" + OfflinePolicy.SolutionPath + "', actual '" + actual + "'. No operation performed.");
@@ -145,6 +160,7 @@ namespace Te1000Daemon
                 if (!_owned) throw new BridgeException("Will not open a solution in a user-owned XAE instance.");
             }
             _initializationStage = "Solution.Open";
+            GitCheckout.AssertPinned();
             Log.Write("Opening pinned solution: " + OfflinePolicy.SolutionPath);
             _dte.Solution.Open(OfflinePolicy.SolutionPath);
             _openCount++;
@@ -180,6 +196,7 @@ namespace Te1000Daemon
         // Return a live, cached DTE for (progId, mode); reconnect if stale/dead.
         public dynamic GetDte(string progId, string mode, bool visible = true)
         {
+            GitCheckout.AssertPinned();
             progId = OfflinePolicy.ProgId;
             mode = OfflinePolicy.SessionMode;
             if (_initializationError != null) throw new BridgeException(_initializationError);
@@ -255,7 +272,7 @@ namespace Te1000Daemon
                 string[] fields = File.ReadAllLines(lease);
                 int pid; long ticks;
                 if (fields.Length != 7 || fields[2] != LifecycleIdentity.SessionId.ToString() || fields[3] != LifecycleIdentity.UserSid ||
-                    fields[4] != LifecycleIdentity.PipeName || !OfflinePolicy.SamePath(fields[5], OfflinePolicy.SolutionPath) ||
+                    (fields[6] != "closed" && fields[4] != LifecycleIdentity.PipeName) || !OfflinePolicy.SamePath(fields[5], OfflinePolicy.SolutionPath) ||
                     !int.TryParse(fields[0], out pid) || !long.TryParse(fields[1], out ticks))
                     throw new BridgeException("Invalid XAE ownership lease: " + lease);
                 bool alive = false;
@@ -278,6 +295,14 @@ namespace Te1000Daemon
                 if (fields[6] != "closed") throw new BridgeException("Owned XAE was lost without audited shutdown; no replacement will be created. Preserve lease/journal.");
             }
             if (OfflinePolicy.SamePath(OfflinePolicy.SolutionPath, OfflinePolicy.WriteSolutionPath)) SaveAudit.AssertCanCloseOrCreate();
+            // A hand-opened or legacy read-only instance may not hold our mutex/lease.
+            bool alreadyOpen = false;
+            foreach (var entry in ListRunningDte(progId))
+            {
+                if (OfflinePolicy.SamePath(entry.Solution, OfflinePolicy.SolutionPath)) alreadyOpen = true;
+                SafeRelease((object)entry.Dte);
+            }
+            if (alreadyOpen) throw new BridgeException("The solution is already open in another XAE. Normal owned shutdown or user closure is required; no duplicate created.");
             // If COM creation crashes before the PID is known, an invalid/pending
             // lease forces operator review instead of starting a duplicate XAE.
             File.WriteAllLines(lease, new[] { "pending", Process.GetCurrentProcess().Id.ToString() });

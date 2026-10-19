@@ -1,43 +1,49 @@
-# 隔离开发流程
+# 单目录 Branch 开发流程
 
-正式工程只读。写入只在明确授权的隔离工程中执行。以下占位符必须替换并核对，代码提交不代表部署。
+每个 Git 仓库使用一个固定本地 checkout，通过普通 feature/fix 分支开发。普通任务禁止新建 Worktree/clone；特殊任务必须先说明必要性并取得明确授权。
 
-## 准备
+单目录模式限已验证的 NexPlc/XAE 布局。旧 linked-worktree 配置仅保留兼容，不因此授权新建 Worktree；其他布局或版本必须独立验收。
 
-从已知 PLC 仓库提交建立独立 linked Worktree，不复制正式未提交变更；在 MCP 仓库根目录独立构建：
+## 切换前
+
+完成 Save Audit、Offline Build、诊断及完整 Git Diff，最后再次审计保存。用原 Profile 的 lifecycle stop 正常关闭自有 XAE/Daemon，确认 closed lease 和无 Pending Journal。手工 XAE 由用户正常关闭，未知 COM 结果或异常审计必须保留现场。
+
+先保护/提交全部有价值的工作区和未跟踪文件，再执行 Git 操作。禁止在 XAE 打开时提交、更换 HEAD 或分支。`daemon/switch-branch.ps1` 在任何 TcXaeShell/devenv 运行、工程租约未知/未关闭、存在历史 Pending Journal 或工作区不干净时拒绝切换；它不会关闭进程。直接使用 Git 不受脚本拦截，因此所有客户端必须遵守此流程。
 
 ```powershell
-git -C '<PLC_REPOSITORY>' worktree add -b '<DEV_BRANCH>' '<DEV_WORKTREE>' '<KNOWN_COMMIT>'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File daemon/build.ps1 -OutputPath "$PWD\daemon\bin\Review"
+& ./daemon/switch-branch.ps1 -Checkout '<PLC_REPOSITORY>' -Branch main
+git -C '<PLC_REPOSITORY>' pull --ff-only
+& ./daemon/switch-branch.ps1 -Checkout '<PLC_REPOSITORY>' -Branch 'fix/component-name' -Create
 ```
 
-helper 要求已验收 MySPT_Machine/MySPT_Machine.sln、MainPLC 等布局，从 Git common directory 识别主 checkout 并拒绝主 checkout/脏副本。其他布局需独立验证，不能手写 Profile 绕过检查。
+## 精确授权
 
-## 精确启动权限
-
-将 `<PLC_ROOT>` 替换为实际已验证树根，仅保留任务所需对象/类型：
+使用独立 Dev 构建，不能覆盖正在运行的 EXE 或正式 Release：
 
 ```powershell
-$plc = '<PLC_ROOT>'
+& ./daemon/build.ps1 -OutputPath "$PWD\artifacts\dev-build"
 & ./daemon/new-dev-profile.ps1 `
-  -Worktree '<DEV_WORKTREE>' `
-  -DaemonExe "$PWD\daemon\bin\Review\Te1000Daemon.exe" `
-  -Profile "$PWD\artifacts\my-task\profile.json" `
-  -TaskName 'NexPlcXae-Dev-MyTask' -Pipe 'nexplc-p4-dev-my-task' `
-  -WriteRoots @("$plc^03_POUs^FB_Example", "$plc^03_POUs^FB_Existing^M_Example", "$plc^01_DUTs^ST_Example", "$plc^01_DUTs^E_Example", "$plc^04_GVLs^GVL_Example") `
-  -WriteTypes @(604,609,606,605,615)
+  -Checkout '<PLC_REPOSITORY>' -AuthorizedBranch 'fix/component-name' `
+  -DaemonExe "$PWD\artifacts\dev-build\Te1000Daemon.exe" `
+  -Profile "$PWD\artifacts\component-task\profile.json" `
+  -TaskName 'NexPlcXae-Dev-Component' -Pipe 'nexplc-p4-dev-fixed-checkout' `
+  -WriteRoots @('<PLC_ROOT>^03_POUs^FB_Existing^I_Component^M_Existing') `
+  -WriteTypes @(609)
 ```
 
-生成器只写 UTF-8 本地配置，不安装/启动任务。FB 授权保留直接子方法行为；文件夹内已有 Method 必须单独授权完整路径，不能借父 FB 授权。深层授权通过只读检查已有 XAE 文件确认精确对象，写入时再通过 COM 验证实际父级链。623、文件夹级权限及 Profile 覆盖被拒绝。
+仍限已验证的 MySPT_Machine/MySPT_Machine.sln、MainPLC 布局。生成器要求干净工作区、精确当前非 main/master 分支，固定 checkout/branch/HEAD、Solution、SID/session、EXE/pipe、对象/类型。分离 HEAD、路径链接和错误授权被拒绝。文件夹内 Method 必须已有且精确授权；哈希、GUID、引用及 Save Audit 不变。配置只生成本地 UTF-8 文件，不自动安装任务或部署。
 
-按 [生命周期](XAE_LIFECYCLE.md) install/start/status/diagnose。将 Profile 完整 env 复制到默认禁用的 [Dev 模板](../examples/nexplc-codex-dev.toml)，保持 connect-only 后启用；不改正式 MCP。
+按 [生命周期](XAE_LIFECYCLE.md) install/start，再将完整 env 复制到默认禁用的 [Dev 模板](../examples/nexplc-codex-dev.toml)。保持 autostart=0。正常停止后重授权使用新 Profile/任务名，复用固定 pipe；不要覆盖旧 Profile、修改旧租约或复用旧 XAE 内存。
 
-## 编辑、审查、集成
+## 工程与集成
 
-1. xae.status 确认精确 Solution、System Manager、PID/所有权，读取树和已有代码。
-2. 按 [API](PLC_OBJECT_API.md) 创建/修改；Method/DUT/GVL 更新传完整内容哈希，不手写 XML/GUID。
-3. preview → save → audit，检查 saved/safe、完整 diff、GUID、唯一 Compile 引用、关键配置和 TmcHash。
-4. 同一路径 open_solution 携 closeExisting=true 重载自有 Dev，读回代码/身份；离线 xae_build、检查 error_list，再审计保存形成恢复基线。
-5. 复核完整 Git Diff，仅集成授权 PLC 代码，不带日志/快照/journal/机器数据。Git 提交/推送/合并需明确授权。
+1. 核对 xae.status 的精确 Solution、System Manager、daemon/XAE 身份与 ownership；读取完整代码/hash。
+2. 只用 [XAE 对象 API](PLC_OBJECT_API.md) 修改授权对象，不直接编辑 PLC XML/GUID。
+3. preview → save → audit；检查 safe/saved、GUID、唯一引用、TmcHash、完整 Git Diff。
+4. 重载同一 owned Solution 并读回；Offline Build，检查全部诊断，再审计保存。
+5. 正常 stop，确认退出、closed lease、无未知结果；再 Commit/Push/PR/合并 main。分支提交和切换均需在 XAE 关闭后。
+6. main 构建结果和远程 SHA 核实后，只删除已合并、无独有内容且不再使用的分支。
 
-未知结果/锁止立即停止写入和成果集成，保留现场 [诊断](TROUBLESHOOTING.md)。不重试、换管道清锁、reset 失败副本或改第三方框架。任务结束仅在保存/审计/所有权通过后正常 stop；不触碰手工 XAE，未保存编辑不能靠重启恢复。
+操作前反复检查固定分支/HEAD；发现变化后锁止会话，切回原分支也不自动解除。新授权使用独立策略目录保存 baseline，所有旧记录原样保留；任一历史 Pending Journal 阻断新授权，不能通过换分支/权限逃逸。旧 lease 必须匹配且正常 closed，未知/旧格式租约不自动迁移。
+
+脚本和操作前检查不能为任意外部 Git/GUI 并发提供文件事务保证。分支意外变化且 XAE 尚开时，保留内存和磁盘现场，不自动保存/重试/结束进程。每次发布仍须满足真实单目录 [验收清单](TESTING.md#single-checkout-release-gate)。

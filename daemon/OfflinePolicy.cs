@@ -48,6 +48,7 @@ namespace Te1000Daemon
         {
             if (!SamePath(SolutionPath, WriteSolutionPath))
                 throw new BridgeException("Read-only solution: saving, building and PLC writes are disabled. Configure TE1000_WRITE_SOLUTION_PATH at daemon startup.");
+            GitCheckout.AssertWritableMode();
         }
 
         public static void AssertWritePath(string path)
@@ -72,6 +73,7 @@ namespace Te1000Daemon
             if (SessionMode != "active" && SessionMode != "createOnce") throw new BridgeException("TE1000_SESSION_MODE must be active or createOnce.");
             if (string.IsNullOrWhiteSpace(SolutionPath) || !Path.IsPathRooted(SolutionPath) || !File.Exists(SolutionPath))
                 throw new BridgeException("TE1000_MCP_SOLUTION_PATH must name an existing absolute solution path.");
+            GitCheckout.AssertPinned();
             if (p.Truthy("mode") && p.Str("mode") != SessionMode) throw new BridgeException("Session mode is fixed at daemon startup.");
             if (p.Truthy("progId") && p.Str("progId") != ProgId) throw new BridgeException("COM ProgID is fixed at daemon startup.");
             if (p.Truthy("expectedSolutionPath") && !SamePath(p.Str("expectedSolutionPath"), SolutionPath))

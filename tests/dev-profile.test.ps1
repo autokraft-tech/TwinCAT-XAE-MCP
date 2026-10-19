@@ -54,6 +54,30 @@ $parameters.Worktree=$seed
 $rejected = $false
 try { & $script @parameters | Out-Null } catch { $rejected=$true }
 if (-not $rejected) { throw 'Primary checkout must be refused regardless of its machine path.' }
+$parameters.WriteTypes=@(604,609,606,605,615)
+$parameters.WriteRoots=@($roots | Where-Object { $_ -ne $nestedRoot })
+& git -C $seed switch -q -c fix/profile-fixture
+if ($LASTEXITCODE) { throw 'Fixture branch setup failed.' }
+$parameters.Profile = Join-Path $fixture 'single.json'
+$parameters.AuthorizedBranch = 'fix/profile-fixture'
+& $script @parameters | Out-Null
+$single = [IO.File]::ReadAllText($parameters.Profile) | ConvertFrom-Json
+if ($single.env.TE1000_GIT_BRANCH -cne 'fix/profile-fixture' -or $single.env.TE1000_GIT_CHECKOUT -ne $seed -or
+    $single.env.TE1000_GIT_WORKFLOW -ne 'single-checkout' -or -not $single.env.TE1000_GIT_HEAD) { throw 'Single checkout branch identity was not pinned.' }
+. (Join-Path $repoDir 'daemon\git-checkout.ps1')
+$singleMap=@{}; foreach ($entry in $single.env.PSObject.Properties) { $singleMap[$entry.Name]=[string]$entry.Value }
+Assert-XaeGitProfile $singleMap
+& git -C $seed switch -q -c fix/other-fixture
+if ($LASTEXITCODE) { throw 'Fixture branch drift setup failed.' }
+$rejected=$false
+try { Assert-XaeGitProfile $singleMap } catch { $rejected=$true }
+if (-not $rejected) { throw 'Branch drift must be rejected even when HEAD commit is identical.' }
+$parameters.Profile=Join-Path $fixture 'wrong-branch.json'
+$rejected=$false
+try { & $script @parameters | Out-Null } catch { $rejected=$true }
+if (-not $rejected) { throw 'Wrong branch authorization must fail.' }
+$parameters.Remove('AuthorizedBranch')
+$parameters.WriteRoots=$roots
 $parameters.Worktree=$dev
 [IO.File]::AppendAllText((Join-Path $dev 'MySPT_Machine\MySPT_Machine.sln'), 'dirty')
 $rejected = $false

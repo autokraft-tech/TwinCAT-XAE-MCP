@@ -15,3 +15,7 @@ const profile = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "
 if (profile.status !== 0) process.exit(profile.status || 1);
 const nested = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve(__dirname, "../daemon/test-nested-method.ps1")], { stdio: "inherit", windowsHide: true });
 if (nested.status !== 0) process.exit(nested.status || 1);
+const checkout = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve(__dirname, "../daemon/test-git-checkout.ps1")], { stdio: "inherit", windowsHide: true });
+if (checkout.status !== 0) process.exit(checkout.status || 1);
+const branchSwitch = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "switch-branch.test.ps1")], { stdio: "inherit", windowsHide: true });
+if (branchSwitch.status !== 0) process.exit(branchSwitch.status || 1);

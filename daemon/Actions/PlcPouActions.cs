@@ -761,7 +761,7 @@ namespace Te1000Daemon
                 throw new BridgeException("Declaration must preserve the DUT kind.");
             AssertContentHash(ctx.Payload, PouHelper.GetDeclaration((object)item), type);
             ctx.Session.BeforeObjectWrite(path, false, type, methodOwner);
-            try { PouHelper.SetDeclaration((object)item, declText); ctx.Session.SaveAudit.AfterObjectWrite(); }
+            try { PouHelper.SetDeclaration((object)item, declText); ctx.Session.AfterObjectWrite(); }
             catch (Exception ex) { ctx.Session.SaveAudit.Block("Declaration write outcome requires inspection: " + ex.Message); throw; }
             ctx.Cache.Invalidate(path);
 
@@ -833,7 +833,7 @@ namespace Te1000Daemon
             if (type != 604 && type != 609) throw new BridgeException("DUTs and GVLs have declarations only; ST implementation writes are disabled.");
             AssertImplementationWrite(ctx.Payload, PouHelper.GetImplementation((object)item), type, PouHelper.GetImplementationLanguage((object)item));
             ctx.Session.BeforeObjectWrite(path, false, type, methodOwner);
-            try { PouHelper.SetImplementationText((object)item, ctx.Payload.Str("implText")); ctx.Session.SaveAudit.AfterObjectWrite(); }
+            try { PouHelper.SetImplementationText((object)item, ctx.Payload.Str("implText")); ctx.Session.AfterObjectWrite(); }
             catch (Exception ex) { ctx.Session.SaveAudit.Block("ST write outcome requires inspection: " + ex.Message); throw; }
             ctx.Cache.Invalidate(path);
 
@@ -1388,7 +1388,7 @@ namespace Te1000Daemon
                 dynamic child = parentItem.CreateChild(name, subType, before, vInfo);
                 AssertWellFormedChild(parentItem, child, name, subType, parent);
                 if (((ITcSmTreeItem)(object)child).ItemType != subType) throw new BridgeException("CreateChild returned an unexpected PLC object type.");
-                ctx.Session.SaveAudit.AfterObjectWrite();
+                ctx.Session.AfterObjectWrite();
                 return child;
             }
             catch (Exception ex) { ctx.Session.SaveAudit.Block("Create outcome requires inspection: " + ex.Message); throw; }
