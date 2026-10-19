@@ -29,6 +29,26 @@ namespace Te1000Daemon
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
 
         public int XaePid { get { return _xaePid; } }
+        private ProjectSaveAudit _saveAudit;
+        internal ProjectSaveAudit SaveAudit { get { return _saveAudit ?? (_saveAudit = new ProjectSaveAudit(OfflinePolicy.SolutionPath)); } }
+        internal void BeforeObjectWrite(string path, bool create, int type = 604)
+        {
+            foreach (dynamic document in _dte.Documents)
+                if (!(bool)document.Saved) throw new BridgeException("Unsaved editor document detected; preserve user edits before MCP writes.");
+            SaveAudit.BeforeObjectWrite(path, create, type);
+        }
+        internal Json.JObj SaveAudited()
+        {
+            AssertSolution();
+            string root = Path.GetDirectoryName(Path.GetFullPath(OfflinePolicy.SolutionPath)) + Path.DirectorySeparatorChar;
+            foreach (dynamic project in _dte.Solution.Projects)
+                if (!Path.GetFullPath((string)project.FullName).StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    throw new BridgeException("SaveAll scope contains a project outside the pinned solution directory.");
+            foreach (dynamic document in _dte.Documents)
+                if (!(bool)document.Saved)
+                    throw new BridgeException("Unsaved editor document detected; SaveAll could overwrite user edits. Save refused.");
+            return SaveAudit.Save(delegate { _dte.ExecuteCommand("File.SaveAll"); });
+        }
         public bool CloseOwned()
         {
             if (_dte == null || !_owned || !ProcessAlive()) return false;
@@ -84,7 +104,7 @@ namespace Te1000Daemon
                 if (!_owned) throw new BridgeException("Cannot close a user-owned XAE solution.");
                 OfflinePolicy.AssertWritableSolution();
                 AssertSolution();
-                _dte.ExecuteCommand("File.SaveAll");
+                SaveAudited();
                 _dte.Solution.Close(false);
                 _sysManager = null;
             }

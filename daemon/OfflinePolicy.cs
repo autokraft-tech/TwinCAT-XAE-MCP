@@ -16,12 +16,21 @@ namespace Te1000Daemon
         public static readonly string ProjectName = Environment.GetEnvironmentVariable("TE1000_PROJECT_NAME") ?? "MySPT_Machine";
         public static readonly string PlcRoot = Environment.GetEnvironmentVariable("TE1000_PLC_ROOT") ?? "TIPC^MainPLC^MainPLC项目";
         private static readonly string[] WriteRoots = (Environment.GetEnvironmentVariable("TE1000_WRITE_ROOTS") ?? "").Split(';');
+        private static readonly string[] WriteTypes = (Environment.GetEnvironmentVariable("TE1000_PLC_WRITE_TYPES") ?? "604").Split(';');
+        public static void AssertObjectType(int type)
+        {
+            // Each additional type still requires its own startup-pinned write permission.
+            // 623 remains disabled after its single documented-array validation failed on 4026.20.
+            if ((type != 604 && type != 609 && type != 606 && type != 605 && type != 615) || Array.IndexOf(WriteTypes, type.ToString()) < 0)
+                throw new BridgeException("PLC object type is not enabled at daemon startup: " + type);
+        }
         public static readonly HashSet<string> Actions = new HashSet<string>(StringComparer.Ordinal)
         {
             "xae_status", "xae_open_solution", "xae_save_all", "xae_get_error_list",
             "xae_solution_build", "twincat_lookup_tree_item", "twincat_list_children",
             "plc_pou_tree", "plc_pou_get_decl", "plc_pou_get_impl", "plc_pou_create",
-            "plc_pou_set_decl", "plc_pou_set_impl"
+            "plc_pou_set_decl", "plc_pou_set_impl",
+            "project_changes", "project_save_preview", "project_save_audit", "project_save"
         };
 
         public static bool SamePath(string a, string b)
@@ -67,16 +76,24 @@ namespace Te1000Daemon
                 if (p.Bool("closeExisting")) AssertWritableSolution();
             }
             bool write = action == "plc_pou_create" || action == "plc_pou_set_decl" || action == "plc_pou_set_impl";
-            if (write || action == "xae_save_all" || action == "xae_solution_build") AssertWritableSolution();
+            if (write || action == "xae_save_all" || action == "project_save" || action == "xae_solution_build") AssertWritableSolution();
             if (write)
             {
                 string path = p.Str("path");
                 if (action == "plc_pou_create")
                 {
                     if (!Regex.IsMatch(p.Str("name") ?? "", @"^[A-Za-z_][A-Za-z0-9_]*$")) throw new BridgeException("Invalid PLC object name.");
+                    if (p["subType"] is string || p.Str("subType") != p.Int("subType").ToString(System.Globalization.CultureInfo.InvariantCulture))
+                        throw new BridgeException("subType must be an integer.");
                     // Expand only after validating the corresponding interface locally.
-                    if (p.Int("subType") != 604 || p.Int("language", 1) != 1)
-                        throw new BridgeException("Only ST function-block creation (604, language 1) is validated.");
+                    AssertObjectType(p.Int("subType"));
+                    if (p.Has("language") && (p["language"] is string || p.Str("language") != "1")) throw new BridgeException("Only integer ST language 1 is enabled.");
+                    if (p.Int("subType") == 609 && (p.Str("expectedHash") != "absent" || !Regex.IsMatch(p.Str("returnType") ?? "", @"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")))
+                        throw new BridgeException("Method creation requires expectedHash=absent and a PLC return type.");
+                    if (p.Int("subType") == 623 && (p.Str("expectedHash") != "absent" || !Regex.IsMatch(p.Str("declText") ?? "", @"(?i)\A\s*TYPE\s+" + Regex.Escape(p.Str("name")) + @"\s*:\s*DINT\s*;\s*END_TYPE\s*\z")))
+                        throw new BridgeException("ALIAS creation requires expectedHash=absent and a complete matching DINT alias declaration.");
+                    if (p.Int("subType") != 604 && p.Int("subType") != 609 && p.Int("subType") != 623 && (p.Str("expectedHash") != "absent" || p.Has("declText")))
+                        throw new BridgeException("DUT creation requires expectedHash=absent; set its declaration separately with a content hash.");
                     path = p.Str("parent") + "^" + p.Str("name");
                 }
                 if (p.Has("implXml") && p["implXml"] != null) throw new BridgeException("XML implementation writes are disabled; use ST text.");

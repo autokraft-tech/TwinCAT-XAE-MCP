@@ -1,6 +1,13 @@
 # NexPlc：本机 XAE 64-bit 离线适配
 
-本 Fork 当前只公开 `xae`、`tc_tree`、`plc_pou`、`xae_build` 四组 MCP 工具。
+已安装的正式基线只公开 `xae`、`tc_tree`、`plc_pou`、`xae_build` 四组 MCP 工具。
+当前开发源码另外提供 `project_changes`、`project_save_preview`、`project_save`、
+`project_save_audit`，仅在客户端配置了写入 Solution 时公布，用于隔离工程的保存审计。
+ST Method（609）已在独立工程通过本机验证，需 Daemon 启动时显式配置
+`TE1000_PLC_WRITE_TYPES=604;609`。STRUCT（606）、ENUM（605）和 GVL（615）
+已分别通过独立保存、重载、GUID/引用和离线编译验收，可按启动权限启用；ALIAS（623）仍禁用。
+接口与限制见 [PLC 对象接口](docs/PLC_OBJECT_API.md)。第二阶段状态与限制见
+[第二阶段报告](docs/NEXPLC_XAE_MCP_PHASE2_REPORT.md)；未完成验收前不要替换正式 Daemon。
 Daemon 使用独立允许列表强制限制能力；上游的确认字符串不能启用下载、在线变更、
 Login/Logout、配置激活、Runtime 重启、ADS 写入、设备控制、任意 DTE 命令、
 对象删除/重命名/移动、工程 XML 写入或对话框点击。
@@ -63,7 +70,9 @@ plc_pou   {"action":"get_impl","path":"TIPC^MainPLC^MainPLC项目^03_POUs^01_Bas
 `xae.open_solution(closeExisting:true)`。离线编译使用 `xae_build(action:"build")`；
 该操作只调用 PLC 项目的 `SolutionBuild.BuildProject`，之后读取 `xae.error_list`。
 新建拒绝重复名称；修改声明必须保持原 FB 名称，XAE 保留原 GUID。
-不支持的 Method/DUT/GVL 创建或修改应停止，先单独验证官方接口。
+Method 的当前验证范围是 FB 的直接子 Method；写入要求内容哈希，详见第二阶段报告。
+DUT/GVL 仅声明修改，需读取 contentHash 并传入 expectedHash；创建用 expectedHash=absent。
+Dev 配置见 [nexplc-codex-dev.toml](examples/nexplc-codex-dev.toml)，生产注册与二进制保持原样。
 
 已注册的正式 NexPlc 会话保持只读。不要修改 SPT V4 库，也不要手工生成/改写
 TcPOU、plcproj XML 或对象 GUID。读取结果中的 `session` 提供 XAE/Daemon PID、

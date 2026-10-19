@@ -11,10 +11,12 @@ const { spawn } = require("node:child_process");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexplc-policy-"));
   const solution = path.join(dir, "fixture.sln");
   fs.writeFileSync(solution, "policy fixture; no COM operations permitted by this test\n");
-  const child = spawn(path.resolve(__dirname, "../daemon/bin/Release/Te1000Daemon.exe"), ["--pipe", pipe, "--no-watch"], {
+  const child = spawn(process.env.TE1000_DAEMON_EXE || path.resolve(__dirname, "../daemon/bin/Release/Te1000Daemon.exe"), ["--pipe", pipe, "--no-watch"], {
     windowsHide: true, stdio: "ignore", env: { ...process.env,
       TE1000_MCP_SOLUTION_PATH: solution, TE1000_WRITE_SOLUTION_PATH: solution,
       TE1000_SESSION_MODE: "createOnce", TE1000_WRITE_ROOTS: "TIPC^MainPLC^MainPLC项目^03_POUs^FB_Test",
+      TE1000_PLC_WRITE_TYPES: "604;609;605;606;623;615",
+      TE1000_PROGID: "NexPlc.PolicyFixture.NoCOM",
     },
   });
   child.on("error", error => { throw error; });
@@ -60,6 +62,12 @@ const { spawn } = require("node:child_process");
       ["xae_status", { mode: "create" }],
       ["xae_status", { expectedSolutionPath: path.join(dir, "wrong-front.sln") }],
       ["plc_pou_create", { parent: "TIPC^MainPLC^MainPLC项目^03_POUs", name: "FB_Test", subType: 609 }],
+      // Invalid declaration argument remains a pre-COM rejection as types graduate.
+      ...[605, 606, 623, 615].map(subType => ["plc_pou_create", { parent: "TIPC^MainPLC^MainPLC项目^03_POUs", name: "FB_Test", subType, expectedHash: "absent", declText: "TYPE Invalid" }]),
+      ["plc_pou_create", { parent: "TIPC^MainPLC^MainPLC项目^03_POUs", name: "FB_Test", subType: 623, expectedHash: "absent", declText: "TYPE FB_Test : DINT;\nEND_TYPE\n" }],
+      ["plc_pou_create", { parent: "TIPC^MainPLC^MainPLC项目^03_POUs", name: "FB_Test", subType: 604.1 }],
+      ["plc_pou_create", { parent: "TIPC^MainPLC^MainPLC项目^03_POUs", name: "FB_Test", subType: "604" }],
+      ["plc_pou_create", { parent: "TIPC^MainPLC^MainPLC项目^03_POUs", name: "FB_Test", subType: 604, language: 1.1 }],
       ["plc_pou_set_impl", { path: "TIPC^MainPLC^MainPLC项目^03_POUs^FB_Test", implXml: "<x/>" }],
       ["plc_pou_set_impl", { path: "TIPC^MainPLC^MainPLC项目^03_POUs^MAIN", implText: "" }],
       ["plc_pou_get_decl", { path: "TISC^Safety" }],

@@ -25,6 +25,10 @@ namespace Te1000Daemon
             h["xae_clear_error_list"] = XaeClearErrorList;
             h["xae_save_all"] = XaeSaveAll;
             h["xae_solution_build"] = XaeSolutionBuild;
+            h["project_changes"] = ctx => ctx.Session.SaveAudit.Changes();
+            h["project_save_preview"] = ctx => ctx.Session.SaveAudit.Preview();
+            h["project_save_audit"] = ctx => ctx.Session.SaveAudit.Report();
+            h["project_save"] = ctx => ctx.Session.SaveAudited();
         }
 
         // ---- shared helpers (port of bridge helper functions) ----------------
@@ -368,31 +372,29 @@ namespace Te1000Daemon
         // xae_save_all (L5306-5317): Save-Solution (File.SaveAll) then SolutionInfo.
         private static Json.JObj XaeSaveAll(ActionContext ctx)
         {
-            dynamic dte = ctx.Dte(true);
-            dte.ExecuteCommand("File.SaveAll");
-
-            var data = new Json.JObj();
-            data["saved"] = true;
-            data["solution"] = GetSolutionInfo(dte);
-            return data;
+            return ctx.Session.SaveAudited();
         }
 
         // xae_solution_build (L5436-5502).
         private static Json.JObj XaeSolutionBuild(ActionContext ctx)
         {
-            dynamic dte = ctx.Dte();
-            dynamic sm = ctx.SysManager();
-            sm.ConfigurationManager.ActiveTargetPlatform = "TwinCAT RT (x64)";
-            string plcProject = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(OfflinePolicy.SolutionPath), "MainPLC", "MainPLC.plcproj");
-            if (!System.IO.File.Exists(plcProject)) throw new BridgeException("PLC project not found: " + plcProject);
-            dynamic build = dte.Solution.SolutionBuild;
-            build.BuildProject("Debug|TwinCAT RT (x64)", plcProject, true);
             var result = new Json.JObj();
-            result["buildState"] = (int)build.BuildState;
-            result["lastBuildInfo"] = (int)build.LastBuildInfo;
-            result["project"] = plcProject;
-            result["configuration"] = "Debug|TwinCAT RT (x64)";
-            result["offline"] = true;
+            var audit = ctx.Session.SaveAudit.Build(delegate
+            {
+                dynamic dte = ctx.Dte();
+                dynamic sm = ctx.SysManager();
+                sm.ConfigurationManager.ActiveTargetPlatform = "TwinCAT RT (x64)";
+                string plcProject = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(OfflinePolicy.SolutionPath), "MainPLC", "MainPLC.plcproj");
+                if (!System.IO.File.Exists(plcProject)) throw new BridgeException("PLC project not found: " + plcProject);
+                dynamic build = dte.Solution.SolutionBuild;
+                build.BuildProject("Debug|TwinCAT RT (x64)", plcProject, true);
+                result["buildState"] = (int)build.BuildState;
+                result["lastBuildInfo"] = (int)build.LastBuildInfo;
+                result["project"] = plcProject;
+                result["configuration"] = "Debug|TwinCAT RT (x64)";
+                result["offline"] = true;
+            });
+            result["auditArchive"] = audit["archive"];
             return result;
         }
         // ---- error-list reading (port of XaeErrorListProbe, bridge L205-260) -

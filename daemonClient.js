@@ -20,7 +20,7 @@ const { spawn } = require("child_process");
 
 const PIPE_NAME = process.env.TE1000_DAEMON_PIPE || "te1000-mcp";
 const PIPE_PATH = "\\\\.\\pipe\\" + PIPE_NAME;
-const EXE_PATH = path.join(__dirname, "daemon", "bin", "Release", "Te1000Daemon.exe");
+const EXE_PATH = process.env.TE1000_DAEMON_EXE || path.join(__dirname, "daemon", "bin", "Release", "Te1000Daemon.exe");
 const CONNECT_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_CONNECT_MS) || 20000;
 // Per-request ceiling: once a frame is written, the pending id waits for a
 // matching response. Without this, a wedged daemon (or a dropped/malformed reply

@@ -2,7 +2,7 @@
 # .NET Framework MSBuild. No .NET SDK / NuGet / internet required.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File daemon\build.ps1 [-Debug]
-param([switch]$Debug, [string]$InteropPath = $env:TE1000_INTEROP_PATH)
+param([switch]$Debug, [string]$InteropPath = $env:TE1000_INTEROP_PATH, [string]$OutputPath)
 
 $ErrorActionPreference = 'Stop'
 $config = if ($Debug) { 'Debug' } else { 'Release' }
@@ -30,8 +30,11 @@ if (-not $found) {
 
 $proj = Join-Path $PSScriptRoot 'Te1000Daemon.csproj'
 Write-Host "Building $proj ($config|x64)..."
-& $msbuild $proj -nologo "-p:Configuration=$config" -p:Platform=x64 "-p:TCatSysManagerInterop=$found" -v:minimal
+$buildArgs = @($proj, '-nologo', "-p:Configuration=$config", '-p:Platform=x64', "-p:TCatSysManagerInterop=$found", '-v:minimal')
+if ($OutputPath) { $buildArgs += "-p:OutputPath=$OutputPath" }
+& $msbuild @buildArgs
 if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)." }
 
 $exe = Join-Path $PSScriptRoot "bin\$config\Te1000Daemon.exe"
+if ($OutputPath) { $exe = Join-Path $OutputPath 'Te1000Daemon.exe' }
 Write-Host "OK: $exe"

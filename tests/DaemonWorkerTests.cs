@@ -24,7 +24,7 @@ internal static class DaemonWorkerTests
             Environment.SetEnvironmentVariable("TE1000_WRITE_SOLUTION_PATH", "");
             Environment.SetEnvironmentVariable("TE1000_SESSION_MODE", "active");
             var policy = typeof(ComWorker).Assembly.GetType("Te1000Daemon.OfflinePolicy");
-            foreach (string action in new[] { "xae_save_all", "xae_solution_build", "plc_pou_create", "plc_pou_set_decl", "plc_pou_set_impl" })
+            foreach (string action in new[] { "project_save", "xae_save_all", "xae_solution_build", "plc_pou_create", "plc_pou_set_decl", "plc_pou_set_impl" })
             {
                 bool rejected = false;
                 try { policy.GetMethod("Validate").Invoke(null, new object[] { action, new Json.JObj() }); }
@@ -61,7 +61,7 @@ internal static class DaemonWorkerTests
             Thread.Sleep(100);
             Check(calls == 1, "timed-out job must not be replayed and no second worker may execute");
         }
-        Console.WriteLine("worker tests passed (5 read-only policy rejections; 20 same-STA jobs; timeout blocks later work)");
+        Console.WriteLine("worker tests passed (6 read-only policy rejections; 20 same-STA jobs; timeout blocks later work)");
         return 0;
     }
 }

@@ -15,10 +15,15 @@ changing session, tool or policy code.
   online change, login/logout, activation/restart, ADS writes, device control,
   arbitrary DTE commands, XML writes, deletes, moves, renames or dialog clicks.
   Confirmation strings cannot override these restrictions.
-- Only ST FB creation (604, language 1) and ST FB declaration/implementation
-  writes have been validated. DUT/GVL declarations can be read. Method/DUT/GVL
-  creation or modification must stop until separately validated through the
-  corresponding official interfaces. Never synthesize TcPOU/project XML or GUIDs.
+- ST FB creation (604, language 1) and direct-FB ST Method creation (609) plus
+  declaration/implementation updates have been validated locally. Methods need
+  startup `TE1000_PLC_WRITE_TYPES=604;609` and an expected content hash for edits.
+  STRUCT (606), ENUM (605), and GVL (615) independently passed create/edit,
+  audited save/reload, stable GUID/reference and offline-build acceptance. They
+  require explicit startup type permissions and expectedHash (absent on create).
+  ALIAS (623) remains hard-disabled after one isolated candidate failed. Preserve
+  both ALIAS locked sessions/journals; never replay their CreateChild calls.
+  Never synthesize TcPOU/project XML or GUIDs.
 - The installed formal NexPlc session is read-only. All write validation must use
   an isolated worktree with startup-pinned TE1000_WRITE_SOLUTION_PATH and narrowly
   scoped TE1000_WRITE_ROOTS. Existing FB writes must preserve object name and GUID.
@@ -33,3 +38,13 @@ Verification after code changes: build the daemon, run `npm run check`, `npm tes
 `npm run test:offline`, and `node daemon/test-ping.js`. Live tests are opt-in;
 follow the report's isolated-worktree instructions. Stop after the requested
 validation; do not change NexPlc application behavior.
+
+Phase 2 development: read `docs/NEXPLC_XAE_MCP_PHASE2_REPORT.md` and
+`docs/XAE_SAVE_SAFETY.md`. All reachable save paths must use the daemon's
+`SaveAudited`; CreateChild can materialize a TcPOU before SaveAll, so audit after
+each object mutation as well. Never clear a pending/blocked journal to retry.
+Keep the affected worktree and its XAE state for inspection; use a fresh worktree
+for recovery. A post-save audit is not transactional rollback. Do not proceed to
+Method/DUT/GVL or dual-environment acceptance until the P1 gate has passed.
+While production holds the Release EXE, build to a separate `-OutputPath` and set
+`TE1000_DAEMON_EXE` only in the development/test client's startup environment.

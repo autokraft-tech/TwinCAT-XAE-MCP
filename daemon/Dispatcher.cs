@@ -170,6 +170,7 @@ namespace Te1000Daemon
             {
                 var ctx = new ActionContext(action, payload, _worker.Session, _cache, _edits);
                 ctx.Dte(); // Exact Solution.FullName validation on the owning STA.
+                if (action == "xae_solution_build") _worker.Session.SaveAudit.AssertUnblocked();
                 _cache.Clear(); // Never carry RCWs or cached code across session changes.
                 Json.JObj data = handler(ctx);
                 if (data != null) data["session"] = _worker.Session.Info();

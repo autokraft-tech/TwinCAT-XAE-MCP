@@ -176,6 +176,9 @@ const registrations = [];
 const server = {
   registerTool: (name, config, handler) => registrations.push([name, config, handler]),
 };
+for (const name of ["project_changes", "project_save_preview", "project_save", "project_save_audit"]) {
+  server.registerTool(name, offlineSchemas[name], async () => textResult(await bridgeCall(name)));
+}
 
 function buildServer() {
   const mcp = new McpServer(
@@ -194,8 +197,13 @@ function buildServer() {
   );
   for (const [name, , handler] of registrations) {
     if (!offlineSchemas[name]) continue;
+    if (name.startsWith("project_") && !process.env.TE1000_WRITE_SOLUTION_PATH) continue;
     mcp.registerTool(name, offlineSchemas[name], async (params) => {
-      try { return await handler(params); }
+      try {
+        if (name === "plc_pou" && ["create", "set_decl", "set_impl"].includes(params.action))
+          return textResult(await bridgeCall("plc_pou_" + params.action, params));
+        return await handler(params);
+      }
       catch (error) { return { isError: true, content: [{ type: "text", text: error.message }] }; }
     });
   }
