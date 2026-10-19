@@ -1,6 +1,6 @@
 # 保存审计与安全恢复
 
-单目录候选首次写入仍要求干净 checkout，固定分支和提交；每个策略 baseline 独立保存，所有历史 Pending Journal 都会阻断新会话。提交/分支切换前必须完成最终审计并正常关闭 XAE。旧审计不删改，详见 [流程](DEVELOPMENT_WORKFLOW.md) 与 [待验收事项](SINGLE_CHECKOUT_VALIDATION.md)。
+单目录候选首次写入仍要求干净 checkout，固定分支和提交；每个策略 baseline 独立保存，所有历史 Pending Journal 都会阻断新会话。提交/分支切换前必须完成最终审计并正常关闭 XAE。旧审计不删改，详见 [流程](DEVELOPMENT_WORKFLOW.md) 与 [待验收事项](TESTING.md#single-checkout-release-gate)。
 
 所有可达 SaveAll 路径经过 STA 上的 SaveAudited，包括 project_save、xae.save_all、重载隐式保存。对象修改也审计磁盘，因为 CreateChild 可能在 SaveAll 前写文件。
 
@@ -46,3 +46,7 @@ TargetNetId、工程/PLC GUID、Task/Runtime、AMS/EtherCAT、TwinCAT 版本不�
 审计在写盘后发生，不能回滚副作用，不是文件事务或防文件所有者篡改的签名系统。Project.Save/ProjectItem.Save 未单独验证，不能作为更安全替代。Flush(true) 不是断电事务保证。
 
 GUI 并发、真实 COM 写超时/晚返回、全部崩溃点、断电及非标准/外链布局尚未完整实测。专用 Dev 避免 GUI 并发修改。见 [生命周期](XAE_LIFECYCLE.md)、[故障排查](TROUBLESHOOTING.md)。
+
+## Output cleanup and recovery evidence
+
+Ordinary temporary reports, build output and disposable task data are not source. Preserve Pending Journals, leases, audit baselines, failure workspaces and audit archives while any running instance, unknown write result, unfinished audit or recovery dependency remains. Prove ownership and the absence of unique user modifications before cleanup; never clear recovery state to make Git clean or bypass a safety lock.

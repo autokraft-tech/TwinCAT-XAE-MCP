@@ -46,4 +46,4 @@ git -C '<PLC_REPOSITORY>' pull --ff-only
 
 操作前反复检查固定分支/HEAD；发现变化后锁止会话，切回原分支也不自动解除。新授权使用独立策略目录保存 baseline，所有旧记录原样保留；任一历史 Pending Journal 阻断新授权，不能通过换分支/权限逃逸。旧 lease 必须匹配且正常 closed，未知/旧格式租约不自动迁移。
 
-脚本和操作前检查不能为任意外部 Git/GUI 并发提供文件事务保证。分支意外变化且 XAE 尚开时，保留内存和磁盘现场，不自动保存/重试/结束进程。候选版本仍需真实单目录验收，见 [验收清单](SINGLE_CHECKOUT_VALIDATION.md)。
+脚本和操作前检查不能为任意外部 Git/GUI 并发提供文件事务保证。分支意外变化且 XAE 尚开时，保留内存和磁盘现场，不自动保存/重试/结束进程。候选版本仍需真实单目录验收，见 [验收清单](TESTING.md#single-checkout-release-gate)。

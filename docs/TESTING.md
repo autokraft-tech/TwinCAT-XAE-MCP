@@ -1,6 +1,6 @@
 # 测试与验收
 
-单目录候选增加 test-git-checkout.ps1、主 checkout Profile、跨策略审计锁夹具；必须额外完成 [真实单目录验收](SINGLE_CHECKOUT_VALIDATION.md)，不能以单元测试代替。旧 live 脚本中的固定 linked-worktree 路径不适用于新模式，不能默认运行来创建新副本。
+单目录候选增加 test-git-checkout.ps1、主 checkout Profile、跨策略审计锁夹具；必须额外完成 [真实单目录验收](TESTING.md#single-checkout-release-gate)，不能以单元测试代替。旧 live 脚本中的固定 linked-worktree 路径不适用于新模式，不能默认运行来创建新副本。
 
 ## 本地回归
 
@@ -21,28 +21,18 @@ git diff --check
 | npm run check | MCP 入口语法 |
 | npm test | 工程解析、文档本地链接和默认禁用配置模板 |
 | offline-surface.test.js | 只读 4/Dev 8 工具面及禁止操作/623 |
-| daemon-offline-policy.test.js | 167 项 raw pipe COM 前拒绝，含正式写入及 623 |
+| daemon-offline-policy.test.js | raw pipe COM 前拒绝，含正式写入及 623 |
 | daemon-client.test.js | UTF-8 中文、断线不重放、超时、旧 socket 迟到事件 |
 | daemon-managed-client.test.js | 身份绑定，验证后 socket 替换拒绝写入 |
-| daemon-lifecycle-policy.test.js | 25 项身份/生命周期夹具，含 pending/executing/blocked，无真实 XAE |
-| daemon/test-worker.ps1 | 6 类只读拒绝、20 个同 STA 任务、超时不替换 worker |
-| daemon/test-save-audit.ps1 | 76 项文件夹夹具：GUID/配置/引用/即时写盘/journal/恢复 |
-| daemon/test-nested-method.ps1 | 25 项嵌套 Method 类型/父链/精确权限/哈希/ST 检查，无 COM |
+| daemon-lifecycle-policy.test.js | 身份/生命周期夹具，含 pending/executing/blocked，无真实 XAE |
+| daemon/test-worker.ps1 | 只读拒绝、同 STA 任务、超时不替换 worker |
+| daemon/test-save-audit.ps1 | 文件夹夹具：GUID/配置/引用/即时写盘/journal/恢复 |
+| daemon/test-nested-method.ps1 | 嵌套 Method 类型/父链/精确权限/哈希/ST 检查，无 COM |
 | daemon/test-object-creation.ps1 | ALIAS 内部 builder 拒绝，FB 兼容，无 COM |
 | dev-profile.test.ps1 | 权限、主 checkout/脏副本拒绝、UTF-8、完整任务 action 校验，不注册任务 |
 | daemon/test-ping.js | 临时 Daemon，17 工程/20 可发现动作，不操作真实 XAE |
 
 JS 测试位于 tests/。离线回归只启动临时夹具，不连接 PLC。GitHub CI 目前仅 Ubuntu npm check/test；Windows/interop 回归须本机执行，不能称作 CI 已验收 COM。
-
-## 真实隔离 XAE 证据
-
-ST FB、直接 FB Method、STRUCT、ENUM、GVL 分别完成创建/修改、审计保存、重载、代码/GUID/唯一 Compile 引用及离线编译。GVL 覆盖 BOOL/DINT/REAL/ARRAY/自定义 STRUCT。代表性构建 0 错误、1 条既有 SPT C0196 库警告，第三方库未改。
-
-双 MCP 正式只读/Dev 隔离、前端异常断线不重放、CLI 多次退出/启动后 Daemon/XAE PID 和打开计数稳定、正常 stop/显式 start、已审计保存后的失效重附加同一 XAE 并继续编辑均经过真实验证。正式 65 个跟踪文件、二进制、用户配置及两个 ALIAS journal 的保护哈希保持一致。
-
-20 次暖态 status/get_impl 往返：最小 16.49 ms、中位 22.27 ms、平均 23.19 ms、最大 31.83 ms，含 managed 身份检查。一次带审计离线编译约 11.09 s。冷启动更慢，首次读取预算曾不足；这些是单机样本，不是 SLA 或长期稳定性证明。
-
-源码快照、完整 diff、日志、计划任务 XML 和审计留在 ignored artifacts，不发布。Git 保留开发过程，正式文档维护当前能力。
 
 ## 实机测试入口
 
@@ -62,4 +52,30 @@ ST FB、直接 FB Method、STRUCT、ENUM、GVL 分别完成创建/修改、审�
 
 ## 未验证边界
 
-注销/重新登录自动启动、真实另一用户/会话尝试、真实 COM 写超时/晚返回、断电事务、长时间运行、GUI 并发、全部异常崩溃路径、外链/非标准布局尚未完整实测。Method 文件夹验收见 [记录](NESTED_METHOD_VALIDATION.md)。协议/文件夹模拟不能替代实测。ALIAS 禁用且不得重试失败实验；保存审计不是回滚。
+注销/重新登录自动启动、真实另一用户/会话尝试、真实 COM 写超时/晚返回、断电事务、长时间运行、GUI 并发、全部异常崩溃路径、外链/非标准布局尚未完整实测。Method 文件夹按下述真实 XAE 验收要求验证。协议/文件夹模拟不能替代实测。ALIAS 禁用且不得重试失败实验；保存审计不是回滚。
+
+## Real XAE acceptance requirements
+
+Offline fixtures establish policy/parser behavior, not COM behavior or permission to deploy. For each supported object kind, verify the exact Solution/System Manager and daemon/XAE ownership, startup object/type authorization, full code/hash, a single XAE API mutation, preview/audited save, GUID/reference/configuration invariance, reload/readback, offline build, complete diagnostics and a final audited save before normal owned shutdown. Do not perform Runtime operations.
+
+Nested Method acceptance additionally checks the exact folder/FB ancestry, Method name/FolderPath and owning FB identity; parent code, sibling Methods and project references must not change. A multi-folder COM path requires an independent real specimen; nested creation and nonstandard layouts remain unsupported. Keep the live test source, but do not commit its results, snapshots, profiles or logs.
+
+ALIAS remains disabled and failed/unknown calls must not be replayed. Pending/executing/blocked journals, leases, baselines and recovery-dependent evidence are exempt from ordinary temporary-output cleanup. Never rerun dangerous injection merely to clean documentation or obtain a fresh result.
+
+## Single-checkout release gate
+
+The single-checkout implementation remains a candidate: real primary-checkout XAE offline acceptance is incomplete. Do not merge or deploy it based solely on offline tests or report cleanup. Use an explicitly authorized Dev MCP only after protecting existing user work and normally closing the prior owned XAE. Unknown/legacy leases and pending journals must not be rewritten to obtain acceptance.
+
+| Acceptance | Required evidence |
+| --- | --- |
+| Primary checkout feature branch | Exact checkout/branch/HEAD/Solution and daemon/XAE identity; one authorized XAE API edit; contentHash and GUID/reference invariance |
+| main and branch/HEAD drift | Refusal before mutation, including a switch away/back; no write replay |
+| Open XAE branch switch | Helper refuses without forced closure; old in-memory objects cannot save to another branch |
+| Solution exclusivity | Existing read-only or user XAE prevents a second dedicated instance |
+| Read-only and unauthorized objects | Existing read-only tools work; writes and out-of-scope objects are refused |
+| Save audit and offline build | Preview/save/audit, reload/readback, build, all diagnostics, final audited save |
+| Nested Method regression | Existing exact Method update passes; nested creation stays denied |
+| COM/audit failure | No automatic retry/replacement; historical Pending Journal blocks a new branch/profile |
+| Normal close and reinitialization | Closed lease, no pending/unknown outcome, commit/switch with XAE closed, fresh exact profile |
+
+Branch-policy baselines remain separate while all earlier solution journals are checked. Preserve legacy audit evidence; changing pipe/branch/permissions is not recovery. Arbitrary external Git/GUI concurrency is not a filesystem transaction and must follow the documented shutdown workflow.
