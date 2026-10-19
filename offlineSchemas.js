@@ -20,7 +20,7 @@ const descriptions = {
   xae: "Pinned XAE session: status, open_solution (same solution only; closeExisting reloads owned writable session), save_all, error_list, dialog_probe (report only). Production session is read-only. No dialog clicks or arbitrary commands.",
   xae_build: "Offline PLC build only, in the explicitly configured writable solution. Returns build result; use xae.error_list for diagnostics. No activation or download.",
   tc_tree: "Read PLC project tree identity or children; paths use ^ separators. No tree mutations or XML writes.",
-  plc_pou: "Read PLC tree/declarations/ST. Create ST FB (604), direct FB Method (609), ENUM (605), STRUCT (606) or GVL (615) through official XAE APIs. Method/DUT/GVL edits require expectedHash from a full-content read; declaration-only creation uses expectedHash=absent then set_decl. Writes require startup-pinned solution, exact object roots and TE1000_PLC_WRITE_TYPES. ALIAS (623) remains disabled.",
+  plc_pou: "Read PLC tree/declarations/ST. Create ST FB (604), direct FB Method (609), ENUM (605), STRUCT (606) or GVL (615) through official XAE APIs. Existing ST Methods inside FB folders require exact startup authorization and verified folder/FB ancestry; nested creation is disabled. Method/DUT/GVL edits require expectedHash from a full-content read; declaration-only creation uses expectedHash=absent then set_decl. Writes require startup-pinned solution, exact object roots and TE1000_PLC_WRITE_TYPES. ALIAS (623) remains disabled.",
 };
 const offlineSchemas = {};
 for (const [name, allowed] of Object.entries(actions)) {

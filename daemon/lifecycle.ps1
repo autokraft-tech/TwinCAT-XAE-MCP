@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'task-definition.ps1')
+. (Join-Path $PSScriptRoot 'write-root-validation.ps1')
 $Profile = (Resolve-Path -LiteralPath $Profile).Path
 $settings = Get-Content -LiteralPath $Profile -Raw -Encoding UTF8 | ConvertFrom-Json
 $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -31,9 +32,7 @@ $productionRoot = Split-Path -Parent ([IO.Path]::GetFullPath([string]$commonGit)
 $production = Join-Path $productionRoot 'MySPT_Machine\MySPT_Machine.sln'
 if ($solution -eq $production -or $binary -like '*\bin\Release\*') { throw 'Lifecycle commands cannot manage production.' }
 foreach ($root in $envMap.TE1000_WRITE_ROOTS.Split(';')) {
-    if ($root -notmatch ('^' + [regex]::Escape($envMap.TE1000_PLC_ROOT) + '\^(03_POUs|01_DUTs|04_GVLs)\^[A-Za-z_][A-Za-z0-9_]*(\^[A-Za-z_][A-Za-z0-9_]*)?$')) {
-        throw 'Use exact object paths in startup write roots.'
-    }
+    Assert-XaeWriteRoot $root $envMap.TE1000_PLC_ROOT $solution
 }
 if ($envMap.TE1000_PLC_WRITE_TYPES -notmatch '^(604|609|605|606|615)(;(604|609|605|606|615))*$') { throw 'Unsupported startup write type.' }
 function Get-Sha([string]$Text) {

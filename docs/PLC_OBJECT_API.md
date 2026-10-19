@@ -28,7 +28,7 @@
 | GVL | 615 | 同上，VAR_GLOBAL，可有 attribute 前缀 |
 | ALIAS | 623 | 硬拒绝，启动配置不能开放 |
 
-每个类型还需在 TE1000_PLC_WRITE_TYPES，默认只有 604。已有对象不覆盖、不改名。方法文件夹仅可读，写入未验收且拒绝。DUT/GVL 无实现，set_impl 拒绝。
+每个类型还需在 TE1000_PLC_WRITE_TYPES，默认只有 604。已有对象不覆盖、不改名。已有文件夹 Method 可 set_impl/set_decl，必须单独在启动 Profile 中授权完整 Method 路径；父 FB 或文件夹授权不能代替。目标必须为 609，中间文件夹为 601，归属 FB 为 604；跨 FB 或路径身份不符拒绝。嵌套创建仍禁用。DUT/GVL 无实现，set_impl 拒绝。
 
 直接 Method 创建参数：
 

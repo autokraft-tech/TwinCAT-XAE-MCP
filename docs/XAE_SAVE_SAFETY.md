@@ -12,7 +12,7 @@
 | --- | --- |
 | 既有 PLC 对象 | 授权代码；名称、GUID、结构稳定 |
 | 新对象 | XAE GUID 保持一致，唯一 Compile 引用 |
-| Method | 父 FB 内对应方法，父/子 GUID 稳定 |
+| Method | 实际归属 FB 内的精确方法及 FolderPath，父/子 GUID 稳定 |
 | GVL | TcGVL 身份、声明、预期 LinkAlways |
 | plcproj | 仅预期对象的允许引用变化 |
 | tsproj | 仅 TmcHash 构建元数据及格式，其他配置变化全部锁止 |

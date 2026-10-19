@@ -751,7 +751,7 @@ namespace Te1000Daemon
             dynamic item = ComHelpers.GetTreeItem(sm, path);
             int type = ((ITcSmTreeItem)(object)item).ItemType;
             OfflinePolicy.AssertObjectType(type);
-            AssertDirectMethodParent(sm, path, type);
+            string methodOwner = AssertMethodParent(sm, path, type);
             string keyword = type == 609 ? "METHOD" : type == 604 ? "FUNCTION_BLOCK" : "TYPE";
             Match header = Regex.Match(declText, @"(?i)\A\s*(?:\{[^}]*\}\s*)*" + keyword + @"\s+(?:(?:FINAL|ABSTRACT|PUBLIC|PRIVATE|PROTECTED|INTERNAL)\s+)*([A-Za-z_][A-Za-z0-9_]*)\b");
             bool gvlHeader = type == 615 && Regex.IsMatch(declText, @"(?i)\A\s*(?:\{[^}]*\}\s*)*VAR_GLOBAL\b");
@@ -760,7 +760,7 @@ namespace Te1000Daemon
             if ((type == 606 && !Regex.IsMatch(declText, @"(?i):\s*STRUCT\b")) || (type == 605 && !Regex.IsMatch(declText, @":\s*\(")) || (type == 623 && Regex.IsMatch(declText, @"(?i):\s*(STRUCT\b|UNION\b|\()")))
                 throw new BridgeException("Declaration must preserve the DUT kind.");
             AssertContentHash(ctx.Payload, PouHelper.GetDeclaration((object)item), type);
-            ctx.Session.BeforeObjectWrite(path, false, type);
+            ctx.Session.BeforeObjectWrite(path, false, type, methodOwner);
             try { PouHelper.SetDeclaration((object)item, declText); ctx.Session.SaveAudit.AfterObjectWrite(); }
             catch (Exception ex) { ctx.Session.SaveAudit.Block("Declaration write outcome requires inspection: " + ex.Message); throw; }
             ctx.Cache.Invalidate(path);
@@ -829,11 +829,10 @@ namespace Te1000Daemon
             string via = hasText ? "text" : "xml";
             int type = ((ITcSmTreeItem)(object)item).ItemType;
             OfflinePolicy.AssertObjectType(type);
-            AssertDirectMethodParent(sm, path, type);
+            string methodOwner = AssertMethodParent(sm, path, type);
             if (type != 604 && type != 609) throw new BridgeException("DUTs and GVLs have declarations only; ST implementation writes are disabled.");
-            if (PouHelper.GetImplementationLanguage((object)item) != 1) throw new BridgeException("Only ST code writes are enabled.");
-            AssertContentHash(ctx.Payload, PouHelper.GetImplementation((object)item), type);
-            ctx.Session.BeforeObjectWrite(path, false, type);
+            AssertImplementationWrite(ctx.Payload, PouHelper.GetImplementation((object)item), type, PouHelper.GetImplementationLanguage((object)item));
+            ctx.Session.BeforeObjectWrite(path, false, type, methodOwner);
             try { PouHelper.SetImplementationText((object)item, ctx.Payload.Str("implText")); ctx.Session.SaveAudit.AfterObjectWrite(); }
             catch (Exception ex) { ctx.Session.SaveAudit.Block("ST write outcome requires inspection: " + ex.Message); throw; }
             ctx.Cache.Invalidate(path);
@@ -1304,12 +1303,21 @@ namespace Te1000Daemon
                 throw new BridgeException("Content hash mismatch; read the current object before writing.");
         }
 
-        private static void AssertDirectMethodParent(dynamic sm, string path, int type)
+        private static void AssertImplementationWrite(Json.JObj payload, string text, int type, int language)
         {
-            if (type != 609) return;
-            string parent = path.Substring(0, path.LastIndexOf('^'));
-            var item = (ITcSmTreeItem)(object)ComHelpers.GetTreeItem(sm, parent);
-            if (item.ItemType != 604) throw new BridgeException("Only Methods directly under an FB have passed write validation.");
+            if (language != 1) throw new BridgeException("Only ST code writes are enabled.");
+            AssertContentHash(payload, text, type);
+        }
+
+        private static string AssertMethodParent(dynamic sm, string path, int type)
+        {
+            if (type != 609) return null;
+            string owner = MethodTarget.Resolve(path, OfflinePolicy.PlcRoot, delegate(string current) {
+                var item = (ITcSmTreeItem)(object)ComHelpers.GetTreeItem(sm, current);
+                return new MethodTarget.Node { Path = item.PathName, Type = item.ItemType, ParentPath = item.Parent.PathName };
+            });
+            OfflinePolicy.AssertMethodWritePath(path, owner);
+            return owner;
         }
 
         // ---- COM property getters (C#5 closures over dynamic) ---------------

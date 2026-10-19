@@ -11,7 +11,22 @@ New-Item -ItemType Directory -Path (Join-Path $seed 'MySPT_Machine') -Force | Ou
 & git -C $seed worktree add -q --detach $dev HEAD
 if ($LASTEXITCODE) { throw 'Fixture worktree setup failed.' }
 $plc = 'TIPC^MainPLC^MainPLC' + [char]0x9879 + [char]0x76EE
-$roots = @("$plc^03_POUs^FB_Task", "$plc^03_POUs^FB_Other^M_Task", "$plc^01_DUTs^ST_Task", "$plc^01_DUTs^E_Task", "$plc^04_GVLs^GVL_Task")
+. (Join-Path $repoDir 'daemon\write-root-validation.ps1')
+# Synthetic XML is a parser fixture only; never opened in XAE.
+$pouDir = Join-Path $dev 'MySPT_Machine\MainPLC\03_POUs\02_Components'
+New-Item -ItemType Directory -Path $pouDir -Force | Out-Null
+$pouFile = Join-Path $pouDir 'FB_Test.TcPOU'
+[IO.File]::WriteAllText($pouFile, '<TcPlcObject><POU Name="FB_Test"><Declaration>FUNCTION_BLOCK FB_Test</Declaration><Folder Name="I_Test"/><Folder Name="Inner" FolderPath="I_Test\"/><Method Name="M_Test" FolderPath="I_Test\Inner\"/></POU></TcPlcObject>')
+$nestedRoot = "$plc^03_POUs^02_Components^FB_Test^I_Test^Inner^M_Test"
+Assert-XaeWriteRoot $nestedRoot $plc (Join-Path $dev 'MySPT_Machine\MySPT_Machine.sln')
+foreach ($bad in @("$plc^03_POUs^02_Components", "$plc^03_POUs^02_Components^FB_Test^I_Test", ($nestedRoot + '^Child'), $nestedRoot.Replace('Inner','Other'), $nestedRoot.Replace('FB_Test','OtherFB'), $nestedRoot.Replace('I_Test','..'))) {
+    $rejected = $false
+    try { Assert-XaeWriteRoot $bad $plc (Join-Path $dev 'MySPT_Machine\MySPT_Machine.sln') } catch { $rejected = $true }
+    if (-not $rejected) { throw ('Invalid deep scope must be refused: ' + $bad) }
+}
+& git -C $dev add .
+& git -C $dev -c user.name=Fixture -c user.email=fixture@invalid -c core.hooksPath=NUL commit -q -m parser-fixture
+$roots = @("$plc^03_POUs^FB_Task", "$plc^03_POUs^FB_Other^M_Task", "$plc^01_DUTs^ST_Task", "$plc^01_DUTs^E_Task", "$plc^04_GVLs^GVL_Task", $nestedRoot)
 $profileFile = Join-Path $fixture 'profile.json'
 $parameters = @{
     Worktree=$dev; DaemonExe=$env:TE1000_DAEMON_EXE; Profile=$profileFile

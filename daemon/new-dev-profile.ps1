@@ -8,6 +8,7 @@ param(
     [int[]]$WriteTypes = @(604)
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'write-root-validation.ps1')
 $Worktree = (Resolve-Path -LiteralPath $Worktree).Path
 $DaemonExe = (Resolve-Path -LiteralPath $DaemonExe).Path
 $Profile = [IO.Path]::GetFullPath($Profile)
@@ -26,7 +27,7 @@ if ($TaskName -notmatch '^NexPlcXae-Dev-[A-Za-z0-9_-]+$' -or $Pipe -notmatch '^n
 # Unicode is expressed as codepoints so Windows PowerShell 5 can read this script without a BOM.
 $plcRoot = 'TIPC^MainPLC^MainPLC' + [char]0x9879 + [char]0x76EE
 foreach ($root in $WriteRoots) {
-    if ($root -notmatch ('^' + [regex]::Escape($plcRoot) + '\^(03_POUs|01_DUTs|04_GVLs)\^[A-Za-z_][A-Za-z0-9_]*(\^[A-Za-z_][A-Za-z0-9_]*)?$')) { throw 'Write roots must identify exact objects.' }
+    Assert-XaeWriteRoot $root $plcRoot $solution
 }
 if (-not $WriteRoots.Count -or -not $WriteTypes.Count) { throw 'Explicit startup object and type scope required.' }
 foreach ($type in $WriteTypes) { if ($type -notin @(604,609,606,605,615)) { throw 'Unsupported type; ALIAS remains disabled.' } }

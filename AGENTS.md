@@ -6,7 +6,7 @@ Read [README](README.md), [architecture](docs/ARCHITECTURE.md), [object API](doc
 
 - Prefer validated XAE MCP tools. Never synthesize `.TcPOU`, `.TcDUT`, `.TcGVL`, `.plcproj` XML or GUIDs to bypass XAE. XML inspection is read-only.
 - Production is read-only. Writes require an explicitly authorized isolated linked Worktree, separate Dev EXE/pipe and startup-pinned Solution, object roots and types. Verify exact Solution/System Manager and paths; clients cannot enlarge permissions.
-- Supported writes: ST FB 604, direct-FB ST Method 609, STRUCT 606, ENUM 605, GVL 615. Method folder writes are unvalidated. ALIAS 623 is hard-disabled; preserve failed worktrees/journals and never replay calls.
+- Supported writes: ST FB 604, direct-FB ST Method 609 and exact-authorized existing ST Methods inside FB folders, STRUCT 606, ENUM 605, GVL 615. Nested updates verify 601 folder ancestry and 604 FB ownership; nested creation remains disabled. ALIAS 623 is hard-disabled; preserve failed worktrees/journals and never replay calls.
 - Keep COM on one STA, reuse DTE/System Manager, never start XAE/open Solution per request. Preserve user-owned instances.
 - Never Download, Online Change, Login/Logout, Run, Stop, Reset, activate configuration, restart runtime, write ADS/device outputs, execute arbitrary DTE commands, click dialogs, delete/move/rename objects or change third-party libraries. Confirmation strings cannot override policy.
 
