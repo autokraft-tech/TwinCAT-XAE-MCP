@@ -1,6 +1,6 @@
 # TwinCAT XAE MCP
 
-单目录 Branch 候选流程见 [开发流程](docs/DEVELOPMENT_WORKFLOW.md) 和 [验收状态](docs/TESTING.md#single-checkout-release-gate)。每仓库一个固定 checkout 为新的默认；以下隔离 Worktree 描述属于原已验收模式，普通任务不再默认创建。新模式尚未完成真实 XAE 验收，不自动部署或绕过旧租约。
+默认每仓库一个固定 checkout，以普通非 main 分支开发；正式只读和 Dev 通过正常关闭的租约交接同一 Solution。精确授权、contentHash、保存审计和离线构建仍然必需，见 [开发流程](docs/DEVELOPMENT_WORKFLOW.md) 与 [验收要求](docs/TESTING.md#single-checkout-release-gate)。
 
 基于 Beckhoff TwinCAT 3 XAE Automation Interface 的本地 MCP Server。兼容客户端通过 XAE 工程模型读取和编辑 PLC 对象，由 XAE 维护 GUID 和工程引用，不直接生成 PLC XML。
 
@@ -55,14 +55,14 @@ node daemon/test-ping.js
 
 1. 从 [只读模板](examples/nexplc-codex.toml) 或 [JSON 模板](examples/mcp-config.json) 配置精确 Solution、System Manager 项目、PLC 根和独立管道。默认禁用，替换所有占位符后再启用。
 2. 正式条目 `nexplc_xae` 不配置写 Solution/Roots；保存和编译也被拒绝。
-3. 隔离开发使用独立 linked Worktree、Dev EXE 和 `nexplc_xae_dev`。按 [开发流程](docs/DEVELOPMENT_WORKFLOW.md) 生成精确权限 Profile，再 [安装并启动任务](docs/XAE_LIFECYCLE.md)。
+3. 在固定 checkout 的明确授权非 main 分支上使用独立 Dev EXE 和 `nexplc_xae_dev`。按 [开发流程](docs/DEVELOPMENT_WORKFLOW.md) 生成精确权限 Profile，再 [安装并启动任务](docs/XAE_LIFECYCLE.md)。
 4. Dev MCP 从 Profile 复制完整 env，保持 `TE1000_DAEMON_AUTOSTART=0`。先调用 `xae {"action":"status"}` 核对精确 Solution 和身份。
 
 客户端接入和规范加载见 [MCP 配置](docs/MCP_CONFIGURATION.md)。目前 Profile 生成器和保存/构建映射针对已验收的 NexPlc 布局，不支持直接套用于任意工程结构。
 
 ## PLC 编辑示例
 
-以下为 `plc_pou` 参数；替换 `<PLC_ROOT>`，并先在 Dev 启动权限中列出目标对象。首次写入要求干净 Worktree。
+以下为 `plc_pou` 参数；替换 `<PLC_ROOT>`，并先在 Dev 启动权限中列出目标对象。首次写入要求干净 checkout。
 
 ```json
 {"action":"create","parent":"<PLC_ROOT>^03_POUs","name":"FB_Example","subType":604,"language":1}

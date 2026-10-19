@@ -72,7 +72,9 @@ namespace Te1000Daemon
         {
             if (OfflinePolicy.SamePath(OfflinePolicy.SolutionPath, OfflinePolicy.WriteSolutionPath)) SaveAudit.AssertCanCloseOrCreate();
             if (_dte == null || !_owned || !ProcessAlive()) return false;
-            AssertSolution();
+            // Git drift forbids engineering operations, but must not prevent a
+            // saved, unchanged owned instance from closing without saving.
+            AssertSolutionPath();
             AssertSaved();
             _dte.Solution.Close(false);
             _dte.Quit();
@@ -130,6 +132,11 @@ namespace Te1000Daemon
         public void AssertSolution()
         {
             GitCheckout.AssertPinned();
+            AssertSolutionPath();
+        }
+
+        private void AssertSolutionPath()
+        {
             string actual = (string)_dte.Solution.FullName;
             if (!OfflinePolicy.SamePath(actual, OfflinePolicy.SolutionPath))
                 throw new BridgeException("Wrong solution; expected '" + OfflinePolicy.SolutionPath + "', actual '" + actual + "'. No operation performed.");
@@ -265,7 +272,7 @@ namespace Te1000Daemon
                 string[] fields = File.ReadAllLines(lease);
                 int pid; long ticks;
                 if (fields.Length != 7 || fields[2] != LifecycleIdentity.SessionId.ToString() || fields[3] != LifecycleIdentity.UserSid ||
-                    fields[4] != LifecycleIdentity.PipeName || !OfflinePolicy.SamePath(fields[5], OfflinePolicy.SolutionPath) ||
+                    (fields[6] != "closed" && fields[4] != LifecycleIdentity.PipeName) || !OfflinePolicy.SamePath(fields[5], OfflinePolicy.SolutionPath) ||
                     !int.TryParse(fields[0], out pid) || !long.TryParse(fields[1], out ticks))
                     throw new BridgeException("Invalid XAE ownership lease: " + lease);
                 bool alive = false;

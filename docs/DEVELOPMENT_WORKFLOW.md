@@ -2,7 +2,7 @@
 
 每个 Git 仓库使用一个固定本地 checkout，通过普通 feature/fix 分支开发。普通任务禁止新建 Worktree/clone；特殊任务必须先说明必要性并取得明确授权。
 
-**验收状态：单目录实现是待真实 XAE 离线验收的候选版本，不能仅凭离线夹具测试投入正式 PLC 开发。未替换正式 Daemon。旧 linked-worktree 配置保留兼容，不因此授权新建 Worktree。**
+单目录模式限已验证的 NexPlc/XAE 布局。旧 linked-worktree 配置仅保留兼容，不因此授权新建 Worktree；其他布局或版本必须独立验收。
 
 ## 切换前
 
@@ -46,4 +46,4 @@ git -C '<PLC_REPOSITORY>' pull --ff-only
 
 操作前反复检查固定分支/HEAD；发现变化后锁止会话，切回原分支也不自动解除。新授权使用独立策略目录保存 baseline，所有旧记录原样保留；任一历史 Pending Journal 阻断新授权，不能通过换分支/权限逃逸。旧 lease 必须匹配且正常 closed，未知/旧格式租约不自动迁移。
 
-脚本和操作前检查不能为任意外部 Git/GUI 并发提供文件事务保证。分支意外变化且 XAE 尚开时，保留内存和磁盘现场，不自动保存/重试/结束进程。候选版本仍需真实单目录验收，见 [验收清单](TESTING.md#single-checkout-release-gate)。
+脚本和操作前检查不能为任意外部 Git/GUI 并发提供文件事务保证。分支意外变化且 XAE 尚开时，保留内存和磁盘现场，不自动保存/重试/结束进程。每次发布仍须满足真实单目录 [验收清单](TESTING.md#single-checkout-release-gate)。

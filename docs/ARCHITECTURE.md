@@ -1,6 +1,6 @@
 # 系统架构
 
-单目录候选增加 GitCheckout 固定 checkout/branch/HEAD、策略指纹和操作前校验。独立策略 baseline 仍扫描同 Solution 全部历史 Pending Journal。详见 [验收状态](TESTING.md#single-checkout-release-gate)；以下内容中的隔离 Worktree 为旧模式背景。
+单目录模式增加 GitCheckout 固定 checkout/branch/HEAD、策略指纹和操作前校验。独立策略 baseline 仍扫描同 Solution 全部历史 Pending Journal。详见 [验收状态](TESTING.md#single-checkout-release-gate)；以下内容中的隔离 Worktree 为旧模式背景。
 
 Node.js MCP 前端负责工具描述、参数校验和传输；独立 C# Daemon 在唯一 STA 上持有 XAE COM 并实施工程权限和审计。
 

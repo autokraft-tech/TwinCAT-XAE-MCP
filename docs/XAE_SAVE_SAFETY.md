@@ -1,6 +1,6 @@
 # 保存审计与安全恢复
 
-单目录候选首次写入仍要求干净 checkout，固定分支和提交；每个策略 baseline 独立保存，所有历史 Pending Journal 都会阻断新会话。提交/分支切换前必须完成最终审计并正常关闭 XAE。旧审计不删改，详见 [流程](DEVELOPMENT_WORKFLOW.md) 与 [待验收事项](TESTING.md#single-checkout-release-gate)。
+单目录模式首次写入仍要求干净 checkout，固定分支和提交；每个策略 baseline 独立保存，所有历史 Pending Journal 都会阻断新会话。提交/分支切换前必须完成最终审计并正常关闭 XAE。旧审计不删改，详见 [流程](DEVELOPMENT_WORKFLOW.md) 与 [待验收事项](TESTING.md#single-checkout-release-gate)。
 
 所有可达 SaveAll 路径经过 STA 上的 SaveAudited，包括 project_save、xae.save_all、重载隐式保存。对象修改也审计磁盘，因为 CreateChild 可能在 SaveAll 前写文件。
 

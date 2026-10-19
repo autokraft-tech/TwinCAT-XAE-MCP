@@ -33,11 +33,11 @@ $productionRoot = Split-Path -Parent ([IO.Path]::GetFullPath([string]$commonGit)
 $production = Join-Path $productionRoot 'MySPT_Machine\MySPT_Machine.sln'
 if ($binary -like '*\bin\Release\*') { throw 'Lifecycle commands cannot manage production binaries.' }
 if ($envMap.TE1000_GIT_WORKFLOW) {
-    if ($Action -notin @('status','diagnose')) { Assert-XaeGitProfile $envMap }
+    if ($Action -notin @('status','diagnose','stop')) { Assert-XaeGitProfile $envMap }
 }
 elseif ($solution -eq $production) { throw 'The primary checkout requires explicit single-checkout branch authorization.' }
 foreach ($root in $envMap.TE1000_WRITE_ROOTS.Split(';')) {
-    Assert-XaeWriteRoot $root $envMap.TE1000_PLC_ROOT $solution
+    if ($Action -ne 'stop') { Assert-XaeWriteRoot $root $envMap.TE1000_PLC_ROOT $solution }
 }
 if ($envMap.TE1000_PLC_WRITE_TYPES -notmatch '^(604|609|605|606|615)(;(604|609|605|606|615))*$') { throw 'Unsupported startup write type.' }
 function Get-Sha([string]$Text) {
@@ -97,6 +97,16 @@ function Assert-Lease($Status) {
         $fields[2] -ne [string]$currentSession -or $fields[3] -ne $currentSid -or $fields[4] -ne $pipeName -or
         $fields[5] -ne $solution -or $fields[6] -ne 'owned' -or $process.SessionId -ne $currentSession -or
         $Status.solution.fullName -ne $solution -or -not $Status.session.owned) { throw 'XAE ownership lease mismatch.' }
+}
+function Assert-StopLease {
+    $fields = [IO.File]::ReadAllLines($lease)
+    if ($fields.Count -ne 7 -or $fields[2] -ne [string]$currentSession -or $fields[3] -ne $currentSid -or
+        $fields[4] -ne $pipeName -or $fields[5] -ne $solution -or $fields[6] -ne 'owned') { throw 'XAE ownership lease mismatch.' }
+    $process = Get-Process -Id ([int]$fields[0])
+    if ($process.ProcessName -ne 'TcXaeShell' -or $process.SessionId -ne $currentSession -or
+        $process.StartTime.ToUniversalTime().Ticks.ToString() -ne $fields[1]) { throw 'Owned XAE process identity mismatch.' }
+    # daemon_shutdown checks the cached owned PID, exact Solution, audit and Saved
+    # flags on the STA. Do not issue an engineering query blocked by Git drift.
 }
 $scheduler = New-Object -ComObject 'Schedule.Service'
 $scheduler.Connect()
@@ -175,8 +185,16 @@ if ($Action -eq 'status') {
     exit
 }
 if ($Action -eq 'stop') {
-    $status = Invoke-Rpc 'xae_status' @{expectedSolutionPath=$solution}
-    Assert-Lease $status
+    Assert-StopLease
     $result = Invoke-Rpc 'daemon_shutdown' @{expectedSolutionPath=$solution}
+    $daemon = Get-Process -Id $identity.daemonPid -ErrorAction SilentlyContinue
+    if ($daemon) {
+        if ($daemon.StartTime.ToUniversalTime().Ticks.ToString() -ne $identity.daemonStartTicks -or
+            -not $daemon.WaitForExit(10000)) { throw 'Daemon exit not confirmed; diagnose before any restart.' }
+    }
+    $task = $folder.GetTask($settings.taskName)
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ($task.State -eq 4 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    if ($task.State -eq 4) { throw 'Scheduler host exit not confirmed; no automatic restart.' }
     $result | ConvertTo-Json -Depth 10
 }

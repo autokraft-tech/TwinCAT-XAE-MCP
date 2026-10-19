@@ -24,8 +24,8 @@ TE1000_WRITE_ROOTS = '<PLC_ROOT>^03_POUs^FB_Example;<PLC_ROOT>^01_DUTs^ST_Exampl
 TE1000_PLC_WRITE_TYPES = '604;609;606;605;615'
 TE1000_DAEMON_LOG = '<LOCAL_LOG_PATH>'
 
-# Candidate only: use exact values from a freshly generated branch profile.
-# Real XAE single-checkout acceptance is still required before enabling.
+# Use exact values from a freshly generated non-main branch profile.
+# Reauthorize after normal session shutdown and any branch/commit change.
 TE1000_GIT_WORKFLOW = 'single-checkout'
 TE1000_GIT_CHECKOUT = '<FIXED_PLC_CHECKOUT>'
 TE1000_GIT_BRANCH = '<AUTHORIZED_NON_MAIN_BRANCH>'

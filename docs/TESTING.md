@@ -1,6 +1,6 @@
 # 测试与验收
 
-单目录候选增加 test-git-checkout.ps1、主 checkout Profile、跨策略审计锁夹具；必须额外完成 [真实单目录验收](TESTING.md#single-checkout-release-gate)，不能以单元测试代替。旧 live 脚本中的固定 linked-worktree 路径不适用于新模式，不能默认运行来创建新副本。
+单目录模式覆盖 test-git-checkout.ps1、主 checkout Profile、跨策略审计锁夹具；必须额外完成 [真实单目录验收](TESTING.md#single-checkout-release-gate)，不能以单元测试代替。旧 live 脚本中的固定 linked-worktree 路径不适用于新模式，不能默认运行来创建新副本。
 
 ## 本地回归
 
@@ -64,7 +64,7 @@ ALIAS remains disabled and failed/unknown calls must not be replayed. Pending/ex
 
 ## Single-checkout release gate
 
-The single-checkout implementation remains a candidate: real primary-checkout XAE offline acceptance is incomplete. Do not merge or deploy it based solely on offline tests or report cleanup. Use an explicitly authorized Dev MCP only after protecting existing user work and normally closing the prior owned XAE. Unknown/legacy leases and pending journals must not be rewritten to obtain acceptance.
+Single-checkout releases require real primary-checkout XAE offline acceptance; offline tests or report cleanup alone do not authorize integration or deployment. Use an explicitly authorized Dev MCP only after protecting existing user work and normally closing the prior owned XAE. Unknown/legacy leases and pending journals must not be rewritten to obtain acceptance.
 
 | Acceptance | Required evidence |
 | --- | --- |
@@ -79,3 +79,9 @@ The single-checkout implementation remains a candidate: real primary-checkout XA
 | Normal close and reinitialization | Closed lease, no pending/unknown outcome, commit/switch with XAE closed, fresh exact profile |
 
 Branch-policy baselines remain separate while all earlier solution journals are checked. Preserve legacy audit evidence; changing pipe/branch/permissions is not recovery. Arbitrary external Git/GUI concurrency is not a filesystem transaction and must follow the documented shutdown workflow.
+
+### Fixed-checkout live harness
+
+`tests/live-single-checkout.js <stage> <exact-profile.json>` is opt-in. `flow` performs an authorized nested Method write, audited save/reload/readback, restoration through XAE, offline build and final save; it also checks scope/hash refusals and refusal to switch under an open XAE. `drift` tests the real HEAD-rewrite fence without switching a branch beneath XAE. `reconnect` verifies a newly owned session after normal shutdown. `deny-main`, `deny-branch` and `read-only` require a clean checkout and test temporary roles, backend refusals and normal closed-lease handoff. Results print to the caller; do not commit result files.
+
+Actual branch changes are performed only with XAE closed. The offline Git guard fixtures additionally change branches and commits while checking policy refusals; a live acceptance must not bypass the branch-switch prohibition just to inject drift. Investigate every new diagnostic. Stale messages must be distinguished by a fresh normally closed/reopened session and complete diagnostics; do not suppress unknown warnings or edit generated PLC XML to pass acceptance.
