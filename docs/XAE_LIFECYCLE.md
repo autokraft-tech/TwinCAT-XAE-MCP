@@ -1,5 +1,7 @@
 # Daemon 生命周期
 
+单目录候选允许明确授权的主 checkout 非 main 分支；正常审计关闭后才允许 commit/switch，新 Profile 重授权。任何 XAE 运行时 switch-branch.ps1 保守拒绝切换；发现同 Solution 已打开时不创建第二个实例。旧租约不自动迁移。真实验收尚待完成，见 [流程](DEVELOPMENT_WORKFLOW.md)；下文主 checkout 拒绝规则属于旧模式。
+
 managed Dev 使用当前用户交互计划任务，独立于客户端持有 Daemon/XAE。正式 nexplc_xae 保持只读；脚本不管理或升级正式 Release。
 
 ## 配置

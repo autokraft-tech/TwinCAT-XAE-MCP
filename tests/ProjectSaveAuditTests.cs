@@ -66,6 +66,28 @@ internal static class ProjectSaveAuditTests
     }
     private static int Tests()
     {
+        Run(audit => {
+            Environment.SetEnvironmentVariable("TE1000_GIT_WORKFLOW", "single-checkout");
+            Environment.SetEnvironmentVariable("TE1000_GIT_BRANCH", "fix/first");
+            try
+            {
+                var first = new ProjectSaveAudit(OfflinePolicy.SolutionPath);
+                Begin(first);
+                Check(first.Save(() => {}).Bool("safe"), "First branch save must pass");
+                Environment.SetEnvironmentVariable("TE1000_GIT_BRANCH", "fix/second");
+                var second = new ProjectSaveAudit(OfflinePolicy.SolutionPath);
+                second.AssertCanCloseOrCreate();
+                Check(!second.Recovered, "A new branch must not recover the old branch baseline");
+                Begin(second);
+                Environment.SetEnvironmentVariable("TE1000_GIT_BRANCH", "fix/third");
+                Reject(() => new ProjectSaveAudit(OfflinePolicy.SolutionPath).AssertUnblocked(), "Pending journal in an earlier branch must block new scope");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("TE1000_GIT_WORKFLOW", null);
+                Environment.SetEnvironmentVariable("TE1000_GIT_BRANCH", null);
+            }
+        });
         foreach (string folder in new[] { "", "I_Test\\", "I_Test\\Inner\\" })
         {
             foreach (string fault in new[] { "none", "guid", "invalid-guid", "folder", "parent", "reference" })

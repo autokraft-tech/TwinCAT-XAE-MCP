@@ -11,6 +11,13 @@ namespace Te1000Daemon
         internal static string PipeName = null;
         internal static string UserSid { get { return WindowsIdentity.GetCurrent().User.Value; } }
         internal static int SessionId { get { return Process.GetCurrentProcess().SessionId; } }
+        internal static string AuditDirectory(string root)
+        {
+            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexPlcXaeMcp", "save-audits", ProjectSaveAudit.Hash(Encoding.UTF8.GetBytes(root.ToUpperInvariant())));
+            if (Environment.GetEnvironmentVariable("TE1000_GIT_WORKFLOW") == "single-checkout")
+                directory = Path.Combine(directory, "sessions", PolicyHash);
+            return directory;
+        }
         internal static string PolicyHash
         {
             get
@@ -18,6 +25,9 @@ namespace Te1000Daemon
                 var text = new StringBuilder();
                 foreach (string key in new[] { "TE1000_MCP_SOLUTION_PATH", "TE1000_WRITE_SOLUTION_PATH", "TE1000_WRITE_ROOTS", "TE1000_PLC_WRITE_TYPES", "TE1000_SESSION_MODE", "TE1000_PROGID", "TE1000_XAE_VERSION", "TE1000_PROJECT_NAME", "TE1000_PLC_ROOT" })
                     text.Append(key).Append('=').Append(Environment.GetEnvironmentVariable(key)).Append('\n');
+                if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TE1000_GIT_WORKFLOW")))
+                    foreach (string key in new[] { "TE1000_GIT_WORKFLOW", "TE1000_GIT_CHECKOUT", "TE1000_GIT_BRANCH", "TE1000_GIT_HEAD" })
+                        text.Append(key).Append('=').Append(Environment.GetEnvironmentVariable(key)).Append('\n');
                 return ProjectSaveAudit.Hash(Encoding.UTF8.GetBytes(text.ToString()));
             }
         }

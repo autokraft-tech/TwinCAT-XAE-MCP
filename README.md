@@ -1,5 +1,7 @@
 # TwinCAT XAE MCP
 
+单目录 Branch 候选流程见 [开发流程](docs/DEVELOPMENT_WORKFLOW.md) 和 [验收状态](docs/SINGLE_CHECKOUT_VALIDATION.md)。每仓库一个固定 checkout 为新的默认；以下隔离 Worktree 描述属于原已验收模式，普通任务不再默认创建。新模式尚未完成真实 XAE 验收，不自动部署或绕过旧租约。
+
 基于 Beckhoff TwinCAT 3 XAE Automation Interface 的本地 MCP Server。兼容客户端通过 XAE 工程模型读取和编辑 PLC 对象，由 XAE 维护 GUID 和工程引用，不直接生成 PLC XML。
 
 ## 功能

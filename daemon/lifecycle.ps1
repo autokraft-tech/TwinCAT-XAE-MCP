@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'task-definition.ps1')
 . (Join-Path $PSScriptRoot 'write-root-validation.ps1')
+. (Join-Path $PSScriptRoot 'git-checkout.ps1')
 $Profile = (Resolve-Path -LiteralPath $Profile).Path
 $settings = Get-Content -LiteralPath $Profile -Raw -Encoding UTF8 | ConvertFrom-Json
 $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -30,7 +31,11 @@ $commonGit = & git -C ([IO.Path]::GetDirectoryName($solution)) rev-parse --path-
 if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFileName([string]$commonGit) -ne '.git') { throw 'Cannot identify the protected primary checkout.' }
 $productionRoot = Split-Path -Parent ([IO.Path]::GetFullPath([string]$commonGit))
 $production = Join-Path $productionRoot 'MySPT_Machine\MySPT_Machine.sln'
-if ($solution -eq $production -or $binary -like '*\bin\Release\*') { throw 'Lifecycle commands cannot manage production.' }
+if ($binary -like '*\bin\Release\*') { throw 'Lifecycle commands cannot manage production binaries.' }
+if ($envMap.TE1000_GIT_WORKFLOW) {
+    if ($Action -notin @('status','diagnose')) { Assert-XaeGitProfile $envMap }
+}
+elseif ($solution -eq $production) { throw 'The primary checkout requires explicit single-checkout branch authorization.' }
 foreach ($root in $envMap.TE1000_WRITE_ROOTS.Split(';')) {
     Assert-XaeWriteRoot $root $envMap.TE1000_PLC_ROOT $solution
 }
@@ -44,8 +49,18 @@ $policyText = ''
 foreach ($key in @('TE1000_MCP_SOLUTION_PATH','TE1000_WRITE_SOLUTION_PATH','TE1000_WRITE_ROOTS','TE1000_PLC_WRITE_TYPES','TE1000_SESSION_MODE','TE1000_PROGID','TE1000_XAE_VERSION','TE1000_PROJECT_NAME','TE1000_PLC_ROOT')) {
     $policyText += $key + '=' + $envMap[$key] + "`n"
 }
+if ($envMap.TE1000_GIT_WORKFLOW) {
+    foreach ($key in @('TE1000_GIT_WORKFLOW','TE1000_GIT_CHECKOUT','TE1000_GIT_BRANCH','TE1000_GIT_HEAD')) { $policyText += $key + '=' + $envMap[$key] + "`n" }
+}
 $policyHash = Get-Sha $policyText
 $journalDir = Join-Path $env:LOCALAPPDATA ('NexPlcXaeMcp\save-audits\' + (Get-Sha ([IO.Path]::GetDirectoryName($solution).ToUpperInvariant())))
+$journalHistory = $journalDir
+if ($envMap.TE1000_GIT_WORKFLOW) { $journalDir = Join-Path $journalDir ('sessions\' + $policyHash) }
+function Assert-NoPendingHistory {
+    if (Test-Path -LiteralPath $journalHistory) {
+        if (@(Get-ChildItem -LiteralPath $journalHistory -Filter pending.json -File -Recurse).Count) { throw 'Pending journal in solution history blocks startup. Preserve and diagnose.' }
+    }
+}
 $lease = Join-Path $env:LOCALAPPDATA ('NexPlcXaeMcp\' + (Get-Sha ($solution.ToUpperInvariant())).ToUpperInvariant() + '.lease')
 function Invoke-Rpc([string]$Name, $Payload = @{}, [int]$TimeoutMs = 20000) {
     $socket = New-Object IO.Pipes.NamedPipeClientStream('.', $pipeName, [IO.Pipes.PipeDirection]::InOut)
@@ -120,6 +135,7 @@ if ($Action -eq 'diagnose') {
     exit
 }
 if ($Action -eq 'host') {
+    Assert-NoPendingHistory
     if (Test-Path -LiteralPath (Join-Path $journalDir 'pending.json')) { throw 'Pending journal blocks startup. Preserve and diagnose.' }
     foreach ($key in @(Get-ChildItem Env:TE1000_* | Select-Object -ExpandProperty Name)) { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
     foreach ($key in $envMap.Keys) { [Environment]::SetEnvironmentVariable($key, $envMap[$key], 'Process') }
@@ -129,6 +145,7 @@ if ($Action -eq 'host') {
     exit $daemonProcess.ExitCode
 }
 if ($Action -eq 'start') {
+    Assert-NoPendingHistory
     if (Test-Path -LiteralPath (Join-Path $journalDir 'pending.json')) { throw 'Pending journal blocks startup. Preserve and diagnose.' }
     $task = $folder.GetTask($settings.taskName)
     $taskUser = $task.Definition.Principal.UserId

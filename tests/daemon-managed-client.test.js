@@ -22,10 +22,10 @@ process.env.TE1000_OWNER_SID = "fixture-sid";
 process.env.TE1000_OWNER_SESSION_ID = "1";
 process.env.TE1000_DAEMON_REQUEST_MS = "1000";
 const keys = ["TE1000_MCP_SOLUTION_PATH", "TE1000_WRITE_SOLUTION_PATH", "TE1000_WRITE_ROOTS", "TE1000_PLC_WRITE_TYPES", "TE1000_SESSION_MODE", "TE1000_PROGID", "TE1000_XAE_VERSION", "TE1000_PROJECT_NAME", "TE1000_PLC_ROOT"];
-const hash = crypto.createHash("sha256").update(keys.map(key => key + "=" + (process.env[key] || "") + "\n").join("")).digest("hex");
+const policyHash = () => crypto.createHash("sha256").update(keys.concat(process.env.TE1000_GIT_WORKFLOW ? ["TE1000_GIT_WORKFLOW", "TE1000_GIT_CHECKOUT", "TE1000_GIT_BRANCH", "TE1000_GIT_HEAD"] : []).map(key => key + "=" + (process.env[key] || "") + "\n").join("")).digest("hex");
 const { runViaDaemon } = require("../daemonClient");
 (async () => {
-  let writes = 0, mismatch = false;
+  let writes = 0, mismatch = false, hash = policyHash();
   const sockets = new Set();
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on("close", () => sockets.delete(socket)); socket.setEncoding("utf8");
@@ -45,6 +45,18 @@ const { runViaDaemon } = require("../daemonClient");
   await new Promise(resolve => server.listen("\\\\.\\pipe\\" + process.env.TE1000_DAEMON_PIPE, resolve));
   try {
     assert.deepEqual(await runViaDaemon("read"), { read: true });
+    process.env.TE1000_GIT_WORKFLOW = "single-checkout";
+    process.env.TE1000_GIT_CHECKOUT = "fixture-checkout";
+    process.env.TE1000_GIT_BRANCH = "fix/fixture";
+    process.env.TE1000_GIT_HEAD = "fixture-head";
+    await assert.rejects(runViaDaemon("write"), /identity.*mismatch/);
+    assert.equal(writes, 0, "branch policy cannot reuse the old session identity");
+    hash = policyHash();
+    assert.deepEqual(await runViaDaemon("read"), { read: true });
+    process.env.TE1000_GIT_BRANCH = "fix/other";
+    await assert.rejects(runViaDaemon("write"), /identity.*mismatch/);
+    assert.equal(writes, 0, "branch changes require a new daemon identity");
+    process.env.TE1000_GIT_BRANCH = "fix/fixture";
     mismatch = true;
     await assert.rejects(runViaDaemon("write"), /identity.*mismatch/);
     assert.equal(writes, 0, "wrong policy must reject before sending engineering call");

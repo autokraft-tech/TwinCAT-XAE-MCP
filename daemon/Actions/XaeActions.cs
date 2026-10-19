@@ -388,6 +388,7 @@ namespace Te1000Daemon
                 if (!System.IO.File.Exists(plcProject)) throw new BridgeException("PLC project not found: " + plcProject);
                 dynamic build = dte.Solution.SolutionBuild;
                 build.BuildProject("Debug|TwinCAT RT (x64)", plcProject, true);
+                GitCheckout.AssertPinned();
                 result["buildState"] = (int)build.BuildState;
                 result["lastBuildInfo"] = (int)build.LastBuildInfo;
                 result["project"] = plcProject;

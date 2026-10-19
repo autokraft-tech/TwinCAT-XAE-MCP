@@ -1,5 +1,7 @@
 # 测试与验收
 
+单目录候选增加 test-git-checkout.ps1、主 checkout Profile、跨策略审计锁夹具；必须额外完成 [真实单目录验收](SINGLE_CHECKOUT_VALIDATION.md)，不能以单元测试代替。旧 live 脚本中的固定 linked-worktree 路径不适用于新模式，不能默认运行来创建新副本。
+
 ## 本地回归
 
 Windows x64 开发机安装 XAE interop 后，构建独立输出并选择该 EXE：
