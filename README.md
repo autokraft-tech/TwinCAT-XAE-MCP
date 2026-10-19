@@ -1,498 +1,111 @@
-<p align="center">
-  <img src="docs/assets/te1000-banner.png" alt="TE1000 MCP — MCP server for Beckhoff TwinCAT XAE / TE1000 Automation Interface" width="100%">
-</p>
+# TwinCAT XAE MCP
 
-# te1000-mcp
+基于 Beckhoff TwinCAT 3 XAE Automation Interface 的本地 MCP Server。兼容客户端通过 XAE 工程模型读取和编辑 PLC 对象，由 XAE 维护 GUID 和工程引用，不直接生成 PLC XML。
 
-> A [Model Context Protocol](https://modelcontextprotocol.io) server for **Beckhoff TwinCAT 3** engineering automation — drive the **TE1000 / XAE Automation Interface** from an AI agent or any MCP client.
+## 功能
 
-[![CI](https://github.com/Edge-JB/TwinCAT-XAE-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/Edge-JB/TwinCAT-XAE-MCP/actions/workflows/ci.yml)
-[![MCP](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![TwinCAT](https://img.shields.io/badge/TwinCAT-3%20%2F%20TE1000-orange)](https://www.beckhoff.com/twincat)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+| 能力 | 当前状态 |
+| --- | --- |
+| 持久 XAE COM、单 STA 串行处理 | 已验证，会话由独立 Daemon 持有 |
+| 工程树、声明和 ST 读取 | 已验证，支持中文路径 |
+| ST FB 604、FB 直接子 Method 609 | 创建、修改、保存、重载及编译已验证 |
+| STRUCT 606、ENUM 605、GVL 615 | 独立创建/修改、GUID/Compile 引用及编译已验证 |
+| 保存审计、安全锁止、已审计保存恢复 | 离线及隔离 XAE 验证通过 |
+| 正式只读与隔离 Dev、精确启动权限 | 已验证，权限由服务端配置决定 |
+| 独立 Daemon、交互式 Windows 计划任务 | 同一登录会话的启动/复用/安全停止已验证 |
+| ALIAS 623 | 硬禁用，保留失败现场，不重试 |
 
-`te1000-mcp` exposes the TwinCAT XAE engineering surface — the System Manager tree,
-PLC project authoring, IO/EtherCAT configuration, variable linking, builds, and
-runtime deployment — as a compact set of MCP tools. It talks to a **running XAE Shell**
-through the TE1000 Automation Interface (COM/DTE), so an agent can configure and build
-a TwinCAT project the same way an engineer would in the GUI.
+不提供 PLC 下载、在线控制、ADS 写入、配置激活、任意 DTE 命令或对象删除/移动/重命名。方法文件夹内的方法仅可读取，写入尚未验收。部分上游 handler 保留用于维护比较，不代表已经开放。
 
-A Node MCP front (`index.js`) owns the MCP protocol, tool schemas, and confirmation
-guards; the COM/DTE work runs in a **persistent native C#/.NET daemon**
-(`Te1000Daemon.exe`) that the front talks to over a Windows named pipe. The daemon is
-the sole backend. See [How it works](#how-it-works).
+## 架构
 
-> [!IMPORTANT]
-> This server drives a **real engineering tool** and can activate or download to a
-> **TwinCAT runtime**. Every action that touches the target runtime (activate, restart,
-> download, deletes, licensing) is **confirmation-gated** and off by default.
-> See [Safety & guards](#safety--guards).
-
----
-
-## Contents
-
-- [Highlights](#highlights)
-- [How it works](#how-it-works)
-- [Requirements](#requirements)
-- [Install](#install)
-- [Build the daemon](#build-the-daemon)
-- [Configure your MCP client](#configure-your-mcp-client)
-- [Environment variables](#environment-variables)
-- [Quickstart](#quickstart)
-- [Tool reference](#tool-reference)
-- [Safety & guards](#safety--guards)
-- [Reliability: dialog watchdog & PLC session control](#reliability-dialog-watchdog--plc-session-control)
-- [Troubleshooting](#troubleshooting)
-- [Examples](#examples)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
-
----
-
-## Highlights
-
-- **25 noun-grouped tools** covering the automatable TE1000 surface — tree, IO/EtherCAT,
-  linking, PLC project & POU authoring, libraries, tasks, mapping, routes, fieldbuses,
-  TcCOM, C++, measurement/scope, licensing, and variants.
-- **Batch-first** — every multi-item operation has a `*_batch` form that runs N operations
-  in **one** DTE attach and returns a compact continue-on-error roll-up, instead of paying
-  a process spawn + attach per call.
-- **Native EtherCAT builder** — `tc_ethercat` creates fully-populated EtherCAT boxes
-  (correct identity, SyncManagers, FMMUs, PDOs) for any device class by the GUI's own
-  "Add Box" route, driven from the device's ESI.
-- **Surgical PLC code edits** — `plc_pou` reads, greps, and patches declaration/implementation
-  text in place and returns only the changed region, keeping agent context small.
-- **Safe by default** — destructive and runtime-affecting actions are confirmation-gated; the
-  safety project is never written to, by policy.
-- **Resilient to GUI modals** — a dialog watchdog detects and (optionally) auto-dismisses
-  modal dialogs that would otherwise hang a synchronous COM call forever.
-- **Persistent native daemon** — a long-lived C#/.NET daemon holds the COM session and
-  caches the project tree and POU source text, so warm `plc_pou search` runs roughly
-  **500× faster** than the old per-call spawn model.
-- **Speaks both MCP protocol eras** — the stateless **2026-07-28** revision
-  (envelope-carrying `server/discover` probe, per-request `_meta` envelopes, `resultType`
-  + cache-hint stamping) and the legacy `initialize` handshake (≤ 2025-11-25), on one
-  stdio endpoint. The opening message pins the era per connection (MCP SDK v2
-  `serveStdio`); a claim-less opening — including a bare `server/discover` — is served
-  as legacy traffic per the stdio binding's rules.
-
-## How it works
-
-```
-  MCP client (agent)
-        │  stdio (JSON-RPC, MCP)
-        ▼
-  index.js ───────────────► Te1000Daemon.exe ──COM/DTE──► XAE Shell (TE1000)
-   (Node 20)  named pipe     (persistent, x64,            running TwinCAT project
-   daemonClient.js           net472, STA COM session)
-   toolSchemas.js
+```mermaid
+flowchart LR
+  A[MCP 客户端] --> B[Node.js MCP Server]
+  B --> C[当前用户 Named Pipe]
+  C --> D[C# Daemon]
+  D --> E[单 STA COM Worker]
+  E --> F[TwinCAT XAE]
+  E --> G[保存审计与恢复记录]
 ```
 
-Two cooperating processes:
+独立任务持有 Daemon/XAE。MCP 前端退出后重连已有管道，未知写入不重放，失效 COM Worker 不自动替换。
 
-- **Node MCP front (`index.js`)** — serves MCP/JSON-RPC over stdio through the SDK v2
-  `serveStdio` entry (both the stateless 2026-07-28 era and the legacy `initialize`
-  handshake), validates input with [zod](https://zod.dev), single-sources every tool's
-  input schema from `toolSchemas.js`, enforces the confirmation-token guards, and maps
-  each tool `action` onto a fine-grained bridge action name. It routes those actions to
-  the daemon over a named pipe (`daemonClient.js`).
-- **Native daemon (`daemon/Te1000Daemon.exe`)** — a persistent net472/x64 process that
-  acquires the DTE + `ITcSysManager` **once** and keeps them, runs the dialog watchdog on
-  an internal thread, caches the System Manager tree and POU source text, and serves the
-  front over the pipe. It implements the **same 164 bridge actions** and returns the
-  **same JSON**, so the tool surface is unchanged.
+## 环境与构建
 
-### Pipe protocol
+需要 Windows x64、交互桌面、Node.js 20+、Git、Windows PowerShell 5.1、.NET Framework 4.7.2 targeting pack/兼容运行时，以及 TwinCAT XAE 和 COM interop。真实验收版本为 XAE 3.1.4026.20 / `TcXaeShell.DTE.17.0`；其他版本需独立验证。常规操作不强制管理员权限。
 
-The front and daemon exchange **newline-delimited JSON** over `\\.\pipe\te1000-mcp`
-(name overridable via `TE1000_DAEMON_PIPE`):
-
-```
-  request:   {"id": "<n>", "action": "<bridge_action>", "payload": { … }}
-  response:  {"id": "<n>", "ok": true,  "result": { … }}
-           | {"id": "<n>", "ok": false, "error": "…", "errorKind": "com_error|dialog_blocked|timeout", "dialog": { … }}
-```
-
-Responses are correlated by `id`. The daemon serializes every COM call through a single
-**STA worker thread**, so concurrent pipe clients are safe (XAE serializes anyway). The
-daemon also answers two COM-free meta actions used for health checks: `ping` and
-`list_actions`.
-
-### Why a daemon — the performance win
-
-An earlier model spawned a fresh 32-bit `powershell.exe` bridge (plus a second watcher
-process) on **every** call. Each spawn re-acquired the DTE/`ITcSysManager` COM handles
-(a Running-Object-Table walk + `Marshal.GetActiveObject`), JIT-compiled the inline
-`Add-Type` Win32 helpers, and — for `plc_pou.find`/`search` — re-walked the entire
-project tree from the root (`O(tree-size)`, ~2,900 COM round-trips on a full project),
-so latency grew with project size.
-
-The persistent daemon removes all of that from the hot path:
-
-- **Persistent COM session** (`ComSession.cs`) — the DTE + sysmanager are acquired once,
-  health-checked with a cheap property read, and transparently reconnected if stale.
-- **Two-layer tree cache** (`TreeCache.cs`) — per-object decl/impl source text **and** a
-  flat enumeration of the project's code objects are memoized, so a warm full-project
-  search does *zero* COM tree-walk. This is the **~500×** warm-`search` speed-up.
-- **Edit watcher** (`EditWatcher.cs`) — an on-demand `DTE.Documents`/`.Saved` dirty check
-  plus a `FileSystemWatcher` over the project directory invalidate the cache so it never
-  serves stale source for an object you are editing in the IDE (or that changed on disk).
-- **Internal dialog watcher** (`DialogWatcher.cs`) — runs on its own thread, so there is
-  no per-call watcher process. See [Reliability](#reliability-dialog-watchdog--plc-session-control).
-
-Build the daemon with `daemon/build.ps1` (in-box .NET Framework MSBuild — no SDK/NuGet).
-The daemon requires the **64-bit** TcXaeShell (DTE.17.0).
-See **[docs/architecture.md](docs/architecture.md)** for the end-to-end design and
-**[docs/csharp-daemon-validation.md](docs/csharp-daemon-validation.md)** for the
-build/cut-over/validation guide.
-
-## Requirements
-
-| | |
-|---|---|
-| **OS** | Windows |
-| **TwinCAT** | TwinCAT 3 XAE Shell / XAE installed, with the TE1000 Automation Interface |
-| **Node.js** | 20 or newer (the MCP front; the daemon does not remove the Node dependency) |
-| **A running XAE Shell** | the server attaches to an already-open instance (it does not launch XAE) |
-| **Daemon (required backend)** | the **64-bit** TcXaeShell, a .NET Framework 4.x install (for the in-box MSBuild + net472 runtime), and `TCatSysManagerLib.dll` (ships with TwinCAT) |
-
-The XAE ProgID defaults to `TcXaeShell.DTE.17.0`. Override it with the `TE1000_PROGID`
-environment variable if your installation differs.
-
-The daemon is **not** auto-built — build it once with `daemon/build.ps1` (see
-[Build the daemon](#build-the-daemon)); thereafter the MCP front auto-spawns the prebuilt
-`Te1000Daemon.exe` on first use. If the exe is absent, build it before the front can serve
-calls.
-
-## Install
+在仓库根目录执行：
 
 ```powershell
-git clone https://github.com/Edge-JB/TwinCAT-XAE-MCP.git
-cd TwinCAT-XAE-MCP
-npm install
+npm ci
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File daemon/build.ps1 -OutputPath "$PWD\daemon\bin\Review"
+$env:TE1000_DAEMON_EXE = "$PWD\daemon\bin\Review\Te1000Daemon.exe"
+npm run check
+npm test
+npm run test:offline
+node daemon/test-ping.js
 ```
 
-Verify the server starts:
+构建默认 Release/x64。找不到 interop 时传 `-InteropPath '<TCatSysManagerLib.dll>'`。使用独立输出目录，不替换运行中的 Release；代码提交不代表部署。
+
+## 配置与快速开始
+
+1. 从 [只读模板](examples/nexplc-codex.toml) 或 [JSON 模板](examples/mcp-config.json) 配置精确 Solution、System Manager 项目、PLC 根和独立管道。默认禁用，替换所有占位符后再启用。
+2. 正式条目 `nexplc_xae` 不配置写 Solution/Roots；保存和编译也被拒绝。
+3. 隔离开发使用独立 linked Worktree、Dev EXE 和 `nexplc_xae_dev`。按 [开发流程](docs/DEVELOPMENT_WORKFLOW.md) 生成精确权限 Profile，再 [安装并启动任务](docs/XAE_LIFECYCLE.md)。
+4. Dev MCP 从 Profile 复制完整 env，保持 `TE1000_DAEMON_AUTOSTART=0`。先调用 `xae {"action":"status"}` 核对精确 Solution 和身份。
+
+客户端接入和规范加载见 [MCP 配置](docs/MCP_CONFIGURATION.md)。目前 Profile 生成器和保存/构建映射针对已验收的 NexPlc 布局，不支持直接套用于任意工程结构。
+
+## PLC 编辑示例
+
+以下为 `plc_pou` 参数；替换 `<PLC_ROOT>`，并先在 Dev 启动权限中列出目标对象。首次写入要求干净 Worktree。
+
+```json
+{"action":"create","parent":"<PLC_ROOT>^03_POUs","name":"FB_Example","subType":604,"language":1}
+```
+
+通过 `get_decl/get_impl` 读取代码及完整 `contentHash`，再更新：
+
+```json
+{"action":"set_impl","path":"<PLC_ROOT>^03_POUs^FB_Example","expectedHash":"<get_impl.contentHash>","implText":"nResult := 1;\n"}
+```
+
+依次调用 `project_save_preview {}`、`project_save {}`、`project_save_audit {}`，确认 safe/saved，检查 GUID、唯一 Compile 引用和完整 Git Diff。重载并离线编译，必要时再次审计保存。完整声明和其他类型参数见 [对象 API](docs/PLC_OBJECT_API.md)。
+
+## 生命周期与安全
 
 ```powershell
-node index.js
-# -> te1000-mcp server running on stdio (native daemon mode; MCP 2026-07-28 stateless + legacy initialize)   (Ctrl-C to exit)
+$profileFile = '<LOCAL_PROFILE.json>'
+& ./daemon/lifecycle.ps1 -Action install -Profile $profileFile -AtLogon
+& ./daemon/lifecycle.ps1 -Action start -Profile $profileFile
+& ./daemon/lifecycle.ps1 -Action status -Profile $profileFile
+& ./daemon/lifecycle.ps1 -Action diagnose -Profile $profileFile
+& ./daemon/lifecycle.ps1 -Action stop -Profile $profileFile
 ```
 
-The server communicates over stdio and is normally launched **by an MCP client**, not by
-hand. Running it directly just waits for a client on stdin.
+计划任务使用当前用户 InteractiveToken/LeastPrivilege，`-AtLogon` 可省略。PID/启动时间、SID/session、Solution、EXE、Named Pipe、策略和 owned lease 共同识别实例。stop 检查未保存内容和审计，只正常关闭自有 XAE。客户端不能扩权；raw pipe 同样受服务端限制。
 
-## Build the daemon
+不强制结束用户 XAE，不删 journal/lease 清锁。超时或断线先诊断，不重放写入。
 
-The native daemon is the backend, which you build **once**:
+## 测试与限制
 
-```powershell
-powershell -ExecutionPolicy Bypass -File daemon\build.ps1
-# -> daemon\bin\Release\Te1000Daemon.exe   (Release, x64, net472)
-```
+[测试手册](docs/TESTING.md) 区分真实 XAE 和离线夹具。代表性真实离线编译为 0 错误、1 条既有第三方库警告。源码快照、日志及审计只留在本机。
 
-- Uses the **in-box** .NET Framework MSBuild
-  (`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe`) — **no .NET SDK, no
-  NuGet, no internet**. The csproj is old-style (non-SDK) and targets `net472`; the
-  produced x64 exe also runs on the net48 runtime.
-- References `TCatSysManagerLib.dll` (embedded interop) for the handful of vtable-only
-  `IUnknown` interfaces that late-bound `dynamic` can't reach (`ITcPlcProject`, etc.).
-  `build.ps1` probes the known TwinCAT install paths; if yours differs, edit the
-  `<HintPath>` in `daemon/Te1000Daemon.csproj` and rebuild. Pass `-Debug` for a Debug build.
-- After building, the MCP front **auto-spawns** the exe (detached, `windowsHide`) on the
-  first call and connects to its pipe. The daemon is **single-instance per pipe name**
-  (named mutex), so duplicate spawns are harmless, and it is **detached** so it survives an
-  MCP-front restart. Verify it independently with no XAE attached:
+未实测保证：注销/重新登录自动启动、真实 COM 写超时和晚返回、断电事务、长时间稳定性、GUI 并发编辑及所有崩溃路径。Profile 固定用户会话，新登录可能被保守拒绝。保存审计发生在写盘后，不是回滚、签名存储或文件事务。
 
-  ```powershell
-  node daemon\test-ping.js     # spawns the daemon on a test pipe, round-trips ping
-  ```
+## 文档
 
-> [!NOTE]
-> The running daemon **locks** `Te1000Daemon.exe`. To rebuild after a code change, stop any
-> running instance first: `Get-Process Te1000Daemon | Stop-Process`.
+- [架构](docs/ARCHITECTURE.md)
+- [对象 API](docs/PLC_OBJECT_API.md)
+- [Daemon 生命周期](docs/XAE_LIFECYCLE.md)
+- [保存与恢复安全](docs/XAE_SAVE_SAFETY.md)
+- [MCP 配置](docs/MCP_CONFIGURATION.md)
+- [开发流程](docs/DEVELOPMENT_WORKFLOW.md)
+- [测试](docs/TESTING.md)
+- [故障排查](docs/TROUBLESHOOTING.md)
+- [ALIAS 故障专题](docs/ALIAS_API_VALIDATION.md)
+- [Agent 规范](AGENTS.md)、[贡献说明](CONTRIBUTING.md)、[安全策略](SECURITY.md)、[示例](examples/README.md)
 
-## Configure your MCP client
-
-Point your client at the absolute path of `index.js` in your clone. Example
-(Claude Desktop / Claude Code / any MCP client that reads this shape):
-
-```jsonc
-{
-  "mcpServers": {
-    "te1000": {
-      "command": "node",
-      "args": ["C:\\path\\to\\TwinCAT-XAE-MCP\\index.js"]
-    }
-  }
-}
-```
-
-A ready-to-edit copy lives at [`examples/mcp-config.json`](examples/mcp-config.json).
-
-### Environment variables
-
-All optional. The first group is read by the Node front (`index.js` / `daemonClient.js`);
-the second by the native daemon process. Defaults are from the source.
-
-**Read by the Node front:**
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `TE1000_PROGID` | `TcXaeShell.DTE.17.0` | XAE Shell COM ProgID to attach to (passed through to the daemon as `progId`). |
-| `TE1000_DAEMON_PIPE` | `te1000-mcp` | Named-pipe name. The front and the daemon it spawns share this, so a custom value applies to both. |
-| `TE1000_DAEMON_CONNECT_MS` | `20000` | How long the client waits to connect to (and, if needed, spawn) the daemon before failing the request. |
-| `TE1000_DAEMON_REQUEST_MS` | `1900000` | Node-side per-request ceiling: if no matching response arrives, the request is failed. Set comfortably above the daemon's own ~180 s ceiling so it never pre-empts a legitimately long call. `0` disables it. |
-| `TE1000_DIALOG_WATCH` | on | `0` disables the daemon's internal modal-dialog watchdog. |
-| `TE1000_DIALOG_AUTODISMISS` | on | `0` = detect + report dialogs only, never auto-click an allowlisted one. |
-| `TE1000_DIALOG_GRACE_MS` | `4000` | How long a blocking dialog must persist before the daemon recycles its COM worker. |
-
-**Read by the daemon:**
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `TE1000_MCP_SOLUTION_PATH` | unset | When multiple XAE instances are running, prefer the one whose open solution's full path matches this (otherwise the daemon prefers any instance with an open solution). |
-| `TE1000_DAEMON_DEBUG` | unset | `1` enables a diagnostic log at `%TEMP%\te1000-daemon-<pipe>.log`. |
-| `TE1000_DAEMON_LOG` | unset | Explicit path for the daemon diagnostic log (implies logging on, overrides the default location). |
-
-> The daemon also accepts CLI flags (`--pipe`, `--no-watch`, `--no-autodismiss`,
-> `--grace-ms`, `--allowlist`). The front sets these from the dialog-watch env vars above
-> when it spawns the daemon — you normally don't pass them by hand.
->
-> **Caveat — spawn-time only.** `TE1000_DIALOG_WATCH`, `TE1000_DIALOG_AUTODISMISS`, and
-> `TE1000_DIALOG_GRACE_MS` are read by the Node front **only when it spawns the daemon**, and
-> are translated into the daemon's `--no-watch` / `--no-autodismiss` / `--grace-ms` flags.
-> The daemon is single-instance per pipe, so changing one of these has **no effect on an
-> already-running daemon** — kill that daemon process and let the front re-spawn it before the
-> new value takes effect.
-
-## Quickstart
-
-With XAE Shell open on your solution, an agent can drive a full configure → build loop.
-A typical session (tool name + arguments shown):
-
-```text
-# 1. Confirm the server is attached and a solution is open
-xae            action: "status"
-
-# 2. Inspect the IO tree
-tc_tree        action: "children"  path: "TIID^Device 2 (EtherCAT)"
-
-# 3. Add a populated EtherCAT rack from its ESI (digital in/out + analog)
-tc_ethercat    racks: [{
-                 parent: "TIID^Device 2 (EtherCAT)^R01.Main.N01 (EK1200)",
-                 modules: [{ type: "EL1008" }, { type: "EL2008" }, { type: "EL3064" }]
-               }]
-               save: true
-
-# 4. Link a PLC input to a terminal channel
-tc_link        action: "link"
-               a: "TIPC^MyPlc^MyPlc Instance^PlcTask Inputs^MAIN.bStart"
-               b: "TIID^Device 2 (EtherCAT)^Term 1^Channel 1^Input"
-
-# 5. Build the solution
-xae_build      action: "build"
-
-# 6. (Optional, guarded) download to the target runtime
-plc_download   confirm: "ALLOW_PLC_DOWNLOAD"
-```
-
-More end-to-end recipes — bulk linking, parameter edits via `set_xml`, POU authoring —
-are in [`examples/`](examples/).
-
-## Tool reference
-
-Paths into the System Manager tree use `^` separators, e.g.
-`TIID^Device 2 (EtherCAT)^Box 1^Term 5^Channel 1`. The leading token is the tree root
-(`TIPC` = PLC, `TIID` = IO, `TINC` = NC, `TIRC` = realtime/license, …).
-
-### Engineering & build
-
-| Tool | Purpose | Key actions |
-|---|---|---|
-| `xae` | XAE shell & solution control | `status`, `open_solution`, `save_all`, `active_document`, `selected_items`, `error_list`, `clear_error_list`, `list_commands` |
-| `xae_build` | Compile the active configuration | `clean`, `build`, `rebuild` |
-| `xae_command` | Run a raw DTE command 🔒 | any command name (guarded) |
-
-### System Manager tree, IO & linking
-
-| Tool | Purpose | Key actions |
-|---|---|---|
-| `tc_tree` | Read/write any tree item (identity, XML params, rename, create, delete) | `get`, `children`, `exists`, `get_xml`, `set_xml`, `rename`, `create`, `delete`, `import`, `export`, `focus` — each with a `*_batch` form |
-| `tc_ethercat` | Build fully-populated EtherCAT boxes from their ESI | `racks: [{ parent, modules: [{ type, name?, revision? }] }]` |
-| `tc_link` | Link/unlink variables; verify existing links | `link`, `unlink`, `resolve`, `links`, `link_batch`, `unlink_batch` |
-| `tc_system` | Target & rescan helpers | `get_netid`, `set_netid`, `errors`, `rescan_plc`, `scan_io_boxes` |
-| `tc_mapping` | Bulk variable mapping | `produce`, `consume`, `clear` |
-| `nc` | NC motion tree | `tasks`, `axes`, `axis` |
-
-### PLC project & code
-
-| Tool | Purpose | Key actions |
-|---|---|---|
-| `plc_project` | PLC project lifecycle | `create_from_template`, `open`, `info`, `set_boot_flags`, `generate_boot_project` 🔒, `online` 🔒, `plcopen_export`, `plcopen_import`, `save_as_library` |
-| `plc_pou` | Author + surgically edit POUs/DUTs/GVLs (offline) | author (`create`, `import_template`), read (`get_decl`, `get_impl`, `outline`, `get_graphical`), surgical (`replace`, `replace_lines`, `insert`, `append`), discover (`tree`, `find`, `search`), lifecycle (`rename`, `move`, `delete` 🔒) |
-| `plc_library` | Library refs / placeholders / repos | `list`, `scan`, `add_library`, `add_placeholder`, `set_resolution`, `freeze`, `remove_reference`, `install_library` 🔒, … |
-| `plc_download` | Deploy the active PLC project 🔒 | boot-project (default) or legacy command route |
-| `plc_session` | Online-session control via UI Automation | `status`, `logout` 🔒 |
-
-### Realtime, fieldbus & platform
-
-| Tool | Purpose | Key actions |
-|---|---|---|
-| `tc_task` | RT tasks / cores / linked tasks | `list`, `get`, `create`, `set_params`, `add_image_var`, `get/set_rt_settings`, `bind_cpu`, `get/set_linked_task` |
-| `tc_route` | ADS routes | `list`, `broadcast_search`, `search_host`, `add_route` 🔒, `add_project_route` 🔒 |
-| `tc_settings` | Engineering settings & archives | `get/set_silent_mode`, `get/set_target_platform`, `save_solution_archive`, `save_plc_archive`, `get/set_independent_file`, `get/set_disabled` |
-| `tc_fieldbus` | Non-EtherCAT fieldbuses (PROFINET/PROFIBUS/CANopen/DeviceNet/EAP) | `create_device`, `create_gsd_box`, `add_netvar`, `set_station_address`, `import_dbc`, `get/set_xml` |
-| `tc_module` | TcCOM module objects | `list`, `create`, `get/set_xml`, `enable_symbols`, `set_context` 🔒 |
-| `tc_cpp` | TwinCAT C++ projects/modules | `create_project`, `create_module`, `tmc_codegen`, `set_props`, `build`, `publish` 🔒 |
-| `tc_measurement` | Scope + Analytics (TIAN) | `scope_create`, `scope_record` 🔒, `analytics_create`, `logger_create`, `stream_create`, … |
-| `tc_license` | TwinCAT licensing | `list`, `add`, `activate_response` 🔒 |
-| `tc_variant` | Project variant management | `get_config`, `get_current`, `set_config`, `select`, `enable`, `disable` |
-
-### Runtime (guarded)
-
-| Tool | Purpose |
-|---|---|
-| `twincat_activate_configuration` 🔒 | Activate the configuration on the target |
-| `twincat_restart_runtime` 🔒 | Start/restart the TwinCAT runtime |
-
-🔒 = confirmation-gated. See [Safety & guards](#safety--guards). Full action signatures,
-batch semantics, and return shapes are documented in **[docs/tools.md](docs/tools.md)**.
-
-## Safety & guards
-
-The server **never auto-activates, auto-restarts, or auto-deploys**. Any action that
-changes the target runtime, deletes a node, or alters licensing is blocked unless you pass
-the matching `confirm` token:
-
-| Confirm token | Unlocks |
-|---|---|
-| `ALLOW_TWINCAT_ACTIVATE` | `twincat_activate_configuration` |
-| `ALLOW_TWINCAT_RESTART` | `twincat_restart_runtime` |
-| `ALLOW_PLC_DOWNLOAD` | `plc_download`, `plc_project` boot/online |
-| `ALLOW_XAE_COMMAND_EXEC` | `xae_command` |
-| `ALLOW_PLC_LOGOUT` | `plc_session logout` |
-| `ALLOW_TWINCAT_DELETE` | node/object deletes (or use `dryRun: true` to preview) |
-| `ALLOW_PLC_LIBRARY_REPO` | machine-wide library repository administration |
-| `ALLOW_TWINCAT_ROUTE_WRITE` | ADS route writes |
-| `ALLOW_TWINCAT_MODULE_CONTEXT` | TcCOM context changes |
-| `ALLOW_CPP_PUBLISH` | C++ driver publish |
-| `ALLOW_MEASUREMENT_RECORD` | live scope acquisition |
-| `ALLOW_LICENSE_ACTIVATE` | license activation |
-
-**Safety project policy.** Nothing in this toolchain writes toward the TwinSAFE safety
-project. Every authoring tool refuses safety-rooted (`TISC`) paths via an internal guard.
-Safety remains read-only/diagnostic.
-
-## Reliability: dialog watchdog & PLC session control
-
-A synchronous DTE/COM call blocks inside XAE's modal message loop if XAE raises a modal
-dialog (save-changes, "file changed externally", activate confirm, license prompt) — which
-would hang the MCP call and the calling agent indefinitely.
-
-- **Dialog watchdog.** This runs as an **internal thread** of the daemon
-  (`DialogWatcher.cs`) that polls (~750 ms) for an application-modal dialog owned by the XAE
-  process. It detects application-modal dialogs owned by XAE and either
-  **auto-dismisses** them (if they match a rule in `dialog-allowlist.json`) or **reports** the
-  dialog's title, body, and buttons back to the agent and abandons the call. If a
-  non-allowlisted modal persists past `TE1000_DIALOG_GRACE_MS`, the daemon recycles its COM
-  worker thread (re-acquiring the session on a fresh STA thread) **without** killing the
-  daemon, so subsequent calls recover once the dialog is cleared. Detection is dialog-driven,
-  not a wall-clock timeout, so long legitimate builds are never killed. The allowlist ships
-  **empty** (report-only by default) and must never auto-answer Activate / Run-mode / restart /
-  download / safety prompts.
-- **Interactive resolution.** When a dialog is *not* in the allowlist, the reported error tells
-  the agent to **ask the user** which button to press (and whether to remember it), then call
-  **`xae dialog_resolve {button, remember?}`**. That action clicks the chosen button on the live
-  dialog; with `remember:true` it appends an auto-dismiss rule to `dialog-allowlist.json` and
-  hot-applies it to the running watcher (no restart). Destructive prompts (activate / run-mode /
-  restart / download / boot project / TwinSAFE / safety) are **refused for auto-remember** — the
-  one-time chosen click still happens, but no rule is persisted (`rememberRefused` is reported).
-  Use `xae dialog_probe` (read-only) to inspect the current dialog first.
-- **PLC session control** (`powershell/plc-session.ps1`) uses UI Automation to read and toggle
-  the Login/Logout state (the DTE Login/Logout commands are unreachable on the 64-bit shell).
-  `plc_download` auto-logs-out first (by default) so deferred source edits compile before the
-  boot project is generated. It never logs back in.
-
-Full details: **[docs/operations.md](docs/operations.md)**.
-
-## Troubleshooting
-
-- **`Te1000Daemon.exe not found`** — build it: `daemon\build.ps1`. The front cannot serve
-  calls until the daemon is built.
-- **Build fails on `TCatSysManagerLib`** — the DLL wasn't found at the probed TwinCAT paths.
-  Edit the `<HintPath>` in `daemon/Te1000Daemon.csproj` to your install and rebuild.
-- **Rebuild fails with the exe locked** — a daemon is still running. Stop it first:
-  `Get-Process Te1000Daemon | Stop-Process`, then rebuild.
-- **Daemon won't start / stale behavior** — kill it (above) and let the front re-spawn a fresh
-  one on the next call. Enable `TE1000_DAEMON_DEBUG=1` to capture
-  `%TEMP%\te1000-daemon-<pipe>.log`.
-- **Wrong XAE instance picked** (several open) — set `TE1000_MCP_SOLUTION_PATH` to the
-  solution's full path to pin the daemon to that instance.
-- **A modal dialog is blocking calls** — clear it on the machine, or add a rule to
-  `dialog-allowlist.json` (never for Activate / restart / download / safety prompts). The
-  daemon picks up the allowlist on start.
-
-## Examples
-
-The [`examples/`](examples/) directory contains:
-
-- [`mcp-config.json`](examples/mcp-config.json) — a drop-in client configuration.
-- [`README.md`](examples/README.md) — copy-pasteable recipes: building an EtherCAT rack,
-  bulk-linking IO, editing terminal parameters via `set_xml`, authoring a POU, and a safe
-  build → activate → download flow.
-
-## Documentation
-
-| Document | What's in it |
-|---|---|
-| [docs/architecture.md](docs/architecture.md) | The Node-front + persistent C#/.NET daemon design end to end — pipe protocol, COM session, caching, edit-watching |
-| [docs/tools.md](docs/tools.md) | Complete tool & action reference — signatures, batch semantics, return shapes |
-| [docs/operations.md](docs/operations.md) | Dialog watchdog, PLC session control, and the safety/guard model in depth |
-| [docs/automation-interface.md](docs/automation-interface.md) | Survey of the full TE1000 Automation Interface surface (the menu these tools are carved from) |
-| [docs/csharp-daemon-coverage.md](docs/csharp-daemon-coverage.md) | The 164-action port coverage checklist (bridge action → C# handler) |
-| [docs/csharp-daemon-validation.md](docs/csharp-daemon-validation.md) | Build, cut-over, and live-XAE smoke-test guide for the daemon |
-| [docs/notes.md](docs/notes.md) | Running engineering notes / backlog discovered on real projects |
-| [CHANGELOG.md](CHANGELOG.md) | Version history |
-
-## Contributing
-
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture,
-the daemon build/dev loop, the action-handler contract, and the safety rules every change
-must respect. In short:
-
-```powershell
-npm run check                                          # node --check index.js — syntax-validate the front
-node daemon\test-ping.js                               # daemon process + pipe + JSON round-trip (no XAE)
-powershell -ExecutionPolicy Bypass -File daemon\build.ps1   # rebuild the daemon after a C# change
-```
-
-## License
-
-[MIT](LICENSE) © Edge Automation.
-
-## Legal & trademarks
-
-This is an **independent, third-party project**. It is **not affiliated with, endorsed by,
-sponsored by, or supported by Beckhoff Automation GmbH & Co. KG**.
-
-All product names, logos, and brands are the property of their respective owners:
-
-- **Beckhoff®**, **TwinCAT®**, **TE1000**, and **XAE Shell** are trademarks or registered
-  trademarks of **Beckhoff Automation GmbH & Co. KG**.
-- **EtherCAT®** is a registered trademark and patented technology, licensed by
-  **Beckhoff Automation GmbH, Germany**.
-
-These names are used for identification and descriptive purposes only; their use does not
-imply any affiliation with or endorsement by the trademark holders.
-
-This project does **not** include, bundle, or redistribute any Beckhoff software. It automates
-a separately installed and licensed TwinCAT 3 / TE1000 environment that you must obtain from
-Beckhoff yourself. **You are responsible** for complying with all applicable Beckhoff license
-terms and for any action this tool performs against your engineering or runtime systems.
-
-The software is provided **"AS IS"**, without warranty of any kind, under the [MIT License](LICENSE).
-See [NOTICE](NOTICE) for the full attributions.
+本 Fork 保留上游 Edge Automation 署名和 MIT 许可，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

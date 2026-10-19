@@ -1,4 +1,5 @@
 node_modules/
+artifacts/
 *.log
 
 # Local point-in-time snapshots (e.g. index.js.pre-dialogwatch.bak) — not source of truth
@@ -8,6 +9,16 @@ node_modules/
 # C# daemon build output (rebuild with daemon/build.ps1)
 daemon/bin/
 daemon/obj/
+build/
+bin/
+obj/
+
+# Machine-owned runtime/configuration state must never be published.
+*.lease
+*.pid
+config.toml
+pending.json
+baseline.json
 
 # OS / editor cruft
 Thumbs.db

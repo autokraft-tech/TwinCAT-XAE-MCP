@@ -20,7 +20,7 @@ const { spawn } = require("child_process");
 
 const PIPE_NAME = process.env.TE1000_DAEMON_PIPE || "te1000-mcp";
 const PIPE_PATH = "\\\\.\\pipe\\" + PIPE_NAME;
-const EXE_PATH = path.join(__dirname, "daemon", "bin", "Release", "Te1000Daemon.exe");
+const EXE_PATH = process.env.TE1000_DAEMON_EXE || path.join(__dirname, "daemon", "bin", "Release", "Te1000Daemon.exe");
 const CONNECT_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_CONNECT_MS) || 20000;
 // Per-request ceiling: once a frame is written, the pending id waits for a
 // matching response. Without this, a wedged daemon (or a dropped/malformed reply
@@ -28,12 +28,12 @@ const CONNECT_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_CONNECT_MS) || 20000
 // own per-call ceiling is ~180s and long actions carry their own larger
 // timeoutMs; keep this Node-side wall comfortably above that so we don't pre-empt
 // a daemon call that is legitimately still running. 0 disables (parity escape).
-const REQUEST_TIMEOUT_MS = Number(process.env.TE1000_DAEMON_REQUEST_MS) || 1900000;
+const REQUEST_TIMEOUT_MS = process.env.TE1000_DAEMON_REQUEST_MS === undefined ? 1900000 : Number(process.env.TE1000_DAEMON_REQUEST_MS);
 
 // Watcher/auto-dismiss knobs are honored by the daemon via CLI flags (it runs
 // the watcher internally as a thread). Mirror the index.js env switches.
 const DIALOG_WATCH = process.env.TE1000_DIALOG_WATCH !== "0";
-const AUTO_DISMISS = process.env.TE1000_DIALOG_AUTODISMISS !== "0";
+const AUTO_DISMISS = false;
 const GRACE_MS = Number(process.env.TE1000_DIALOG_GRACE_MS) || 4000;
 
 let sock = null;
@@ -51,9 +51,10 @@ function spawnDaemon() {
   if (!DIALOG_WATCH) args.push("--no-watch");
   if (!AUTO_DISMISS) args.push("--no-autodismiss");
   args.push("--grace-ms", String(GRACE_MS));
-  // Detached so the daemon outlives this MCP process restart; it self-guards as
-  // a single instance per pipe name (named mutex), so duplicate spawns are safe.
+  // Legacy autostart only. Windows hosts may terminate detached descendants;
+  // managed deployments use Task Scheduler and disable client autostart.
   const child = spawn(EXE_PATH, args, { stdio: "ignore", detached: true, windowsHide: true });
+  child.on("error", (error) => console.error("Daemon spawn failed:", error.message));
   child.unref();
 }
 
@@ -61,7 +62,9 @@ function attachSocket(s) {
   sock = s;
   rxBuf = "";
   s.setNoDelay(true);
+  s.setEncoding("utf8"); // Preserve Chinese paths split across pipe frames.
   s.on("data", (chunk) => {
+    if (sock !== s) return;
     rxBuf += chunk.toString("utf8");
     let nl;
     while ((nl = rxBuf.indexOf("\n")) >= 0) {
@@ -76,8 +79,9 @@ function attachSocket(s) {
     }
   });
   const drop = () => {
-    if (sock === s) sock = null;
-    // Fail all in-flight requests; callers may retry. Snapshot the waiters first
+    if (sock !== s) return; // A late close from an old connection cannot affect its replacement.
+    sock = null;
+    // Fail in-flight requests without replay. Snapshot the waiters first
     // (each reject() mutates `pending` via settle()).
     const waiters = Array.from(pending.values());
     pending.clear();
@@ -121,6 +125,8 @@ async function ensureConnected() {
         return s;
       } catch {
         if (!spawned) {
+          if (process.env.TE1000_DAEMON_AUTOSTART === "0")
+            throw new Error("Managed daemon unavailable; use the lifecycle start/diagnose command. No replacement was started and no request was replayed.");
           if (!daemonExeExists()) {
             throw new Error(
               "Te1000Daemon.exe not found at " + EXE_PATH +
@@ -142,10 +148,12 @@ async function ensureConnected() {
   }
 }
 
-function sendOnce(action, payload) {
+function sendOnce(action, payload, expectedSocket) {
   return new Promise(async (resolve, reject) => {
     let s;
     try { s = await ensureConnected(); } catch (e) { return reject(e); }
+    if (expectedSocket && s !== expectedSocket)
+      return reject(new Error("Managed connection changed after identity validation. No engineering action sent; inspect and reconnect explicitly."));
     const id = String(nextId++);
 
     // Per-request timer: if no matching-id response arrives within the ceiling,
@@ -175,7 +183,7 @@ function sendOnce(action, payload) {
     }
 
     try {
-      s.write(JSON.stringify({ id, action, payload }) + "\n");
+      s.write(JSON.stringify({ id, action, payload: { ...payload, expectedSolutionPath: process.env.TE1000_MCP_SOLUTION_PATH } }) + "\n");
     } catch (e) {
       if (timer) { clearTimeout(timer); timer = null; }
       pending.delete(id);
@@ -191,21 +199,8 @@ function toError(action, resp) {
   const btns = Array.isArray(d.buttons) && d.buttons.length
     ? d.buttons.map((b) => `[${b}]`).join(" ") : "(none detected)";
   if (kind === "dialog_blocked") {
-    const labels = Array.isArray(d.buttons) && d.buttons.length
-      ? d.buttons.map((b) => `'${b}'`).join(", ") : "(none detected)";
-    return new Error(
-      `XAE is blocked on a modal dialog, so this '${action}' call cannot complete.\n` +
-      `This dialog is NOT in the auto-dismiss allowlist (dialog-allowlist.json).\n` +
-      `  Title:   ${d.title || "(untitled)"}\n` +
-      `  Message: ${d.text || "(no text)"}\n` +
-      `  Buttons: ${btns}\n` +
-      `ASK THE USER which button to press and whether to remember it (add to the ` +
-      `allowlist so this dialog is auto-dismissed next time). The choices are: ${labels}.\n` +
-      `Then call the 'xae' tool with action 'dialog_resolve', e.g. ` +
-      `{action:'dialog_resolve', button:'No', remember:false}. ` +
-      `(remember:true persists a rule, but destructive prompts — activate/restart/download/safety — are refused for auto-remember.) ` +
-      `The operation's result is indeterminate until the dialog is cleared.`,
-    );
+    return new Error(`XAE dialog blocked '${action}': ${d.title || "(untitled)"}; ${d.text || ""}. Buttons: ${btns}. No button was clicked. Resolve manually, inspect the operation outcome, then restart the daemon.`);
+
   }
   if (kind === "timeout") {
     return new Error(
@@ -219,31 +214,25 @@ function toError(action, resp) {
 }
 
 // Public: run an action via the daemon. Resolves with the `result` (== the PS
-// bridge's `data`), rejects with a mapped Error. One transparent reconnect retry
-// on a dropped pipe.
-function isRetryablePipeError(e) {
-  return !!(e && (e.pipeClosed || /pipe closed|ECONNRESET|EPIPE/i.test(e.message || "")));
-}
+// bridge's `data`), rejects with a mapped Error. The next explicit request can
+// reconnect after a dropped pipe; an in-flight request is never replayed.
 
 async function runViaDaemon(action, payload = {}) {
-  let resp;
-  try {
-    resp = await sendOnce(action, payload);
-  } catch (e) {
-    if (isRetryablePipeError(e)) {
-      try {
-        resp = await sendOnce(action, payload); // reconnect + retry once
-      } catch (e2) {
-        // The pipe is still dropping after a reconnect attempt (a daemon that
-        // connects but immediately closes every frame). Flag it daemon-unavailable
-        // and surface the error to the caller — the daemon is the only backend.
-        if (isRetryablePipeError(e2)) e2.daemonUnavailable = true;
-        throw e2;
-      }
-    } else {
-      throw e;
-    }
+  let validatedSocket;
+  if (process.env.TE1000_DAEMON_AUTOSTART === "0" && action !== "daemon_identity") {
+    validatedSocket = await ensureConnected();
+    const identity = await sendOnce("daemon_identity", {}, validatedSocket);
+    const keys = ["TE1000_MCP_SOLUTION_PATH", "TE1000_WRITE_SOLUTION_PATH", "TE1000_WRITE_ROOTS", "TE1000_PLC_WRITE_TYPES", "TE1000_SESSION_MODE", "TE1000_PROGID", "TE1000_XAE_VERSION", "TE1000_PROJECT_NAME", "TE1000_PLC_ROOT"];
+    const policyHash = require("node:crypto").createHash("sha256").update(keys.map(key => key + "=" + (process.env[key] || "") + "\n").join("")).digest("hex");
+    const info = identity.result || {};
+    if (!identity.ok || info.policyHash !== policyHash || info.pipe !== PIPE_NAME ||
+        String(info.sessionId) !== process.env.TE1000_OWNER_SESSION_ID || info.userSid !== process.env.TE1000_OWNER_SID ||
+        path.resolve(info.executable || "").toLowerCase() !== path.resolve(EXE_PATH).toLowerCase())
+      throw new Error("Managed daemon identity/startup policy mismatch. No engineering action sent.");
   }
+  // A dropped response does not prove the COM action was not executed. Never
+  // replay a request; the next explicit call can reconnect to the same daemon.
+  const resp = await sendOnce(action, payload, validatedSocket);
   if (resp.ok) return resp.result;
   throw toError(action, resp);
 }

@@ -7,9 +7,7 @@
 // v2: tool surface grouped by noun with action enums, terse schemas, compact
 // outputs — agent context is the scarce resource. The daemon answers the
 // original fine-grained action names; this file maps the merged tools onto them.
-// plc_login/plc_logout were dropped from the surface (DTE on the 64-bit shell
-// exposes no window automation, so they never worked here); reach them via
-// xae_command if ever needed on another shell.
+// Runtime control is excluded by both the public schemas and daemon policy.
 // Protocol: MCP SDK v2's serveStdio serves BOTH wire eras on this one stdio
 // endpoint. The opening message pins the era: a request carrying a valid
 // 2026-07-28 _meta envelope claim (server/discover included) pins modern; an
@@ -18,8 +16,6 @@
 // no header layer). Nothing era-specific lives in the handlers.
 "use strict";
 
-const { spawn } = require("child_process");
-const path = require("path");
 const { McpServer } = require("@modelcontextprotocol/server");
 const { serveStdio } = require("@modelcontextprotocol/server/stdio");
 const daemonClient = require("./daemonClient.js");
@@ -28,6 +24,7 @@ const daemonClient = require("./daemonClient.js");
 // map also live there (the schema descriptions interpolate the tokens), and are
 // re-imported here so the handlers reference the same definitions.
 const { toolSchemas, XAE_ACTIONS } = require("./toolSchemas.js");
+const { offlineSchemas } = require("./offlineSchemas.js");
 
 // Confirmation tokens are defined in toolSchemas.js (so the schema descriptions and
 // the handler guards share one definition) and re-exported on that module.
@@ -35,7 +32,6 @@ const {
   ACTIVATE_CONFIRMATION,
   RESTART_CONFIRMATION,
   XAE_COMMAND_CONFIRMATION,
-  PLC_LOGOUT_CONFIRMATION,
   DELETE_CONFIRMATION,
   PLC_DOWNLOAD_CONFIRMATION,
   PLC_LIBRARY_REPO_CONFIRMATION,
@@ -45,39 +41,6 @@ const {
   MEASUREMENT_RECORD_CONFIRMATION,
   LICENSE_ACTIVATE_CONFIRMATION,
 } = require("./toolSchemas.js");
-
-// 64-bit TcXaeShell (DTE.17.0) implies a 64-bit Windows, so the live UIA helper
-// (sessionCall below) runs under 64-bit Windows PowerShell.
-function ps64Exe() {
-  const winDir = process.env.WINDIR || "C:\\Windows";
-  return path.join(winDir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-}
-
-// PLC online-session control via UI Automation (powershell/plc-session.ps1).
-// The 64-bit shell's DTE can't log the PLC out (Logout command never IsAvailable,
-// no key binding), but the IDE's Login/Logout toolbar buttons are reachable via
-// UIA. mode "status" reports { loggedIn, ... }; mode "logout" invokes the Logout
-// button (never Login). Returns the parsed snapshot, or null if it couldn't run.
-function sessionCall(mode) {
-  return new Promise((resolve) => {
-    const psExe = ps64Exe();
-    const scriptPath = path.join(__dirname, "powershell", "plc-session.ps1");
-    const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-Mode", mode];
-    let out = "";
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
-    try {
-      const c = spawn(psExe, args, { stdio: ["ignore", "pipe", "ignore"] });
-      c.stdout.on("data", (d) => { out += d.toString(); });
-      c.on("error", () => finish(null));
-      c.on("close", () => {
-        const line = out.trim().split(/\r?\n/).filter(Boolean).pop();
-        try { finish(JSON.parse(line)); } catch { finish(null); }
-      });
-      setTimeout(() => { try { c.kill(); } catch {} finish(null); }, 30000);
-    } catch { finish(null); }
-  });
-}
 
 async function bridgeCall(action, payload = {}) {
   if (process.env.TE1000_PROGID && !payload.progId) payload.progId = process.env.TE1000_PROGID;
@@ -175,6 +138,9 @@ const registrations = [];
 const server = {
   registerTool: (name, config, handler) => registrations.push([name, config, handler]),
 };
+for (const name of ["project_changes", "project_save_preview", "project_save", "project_save_audit"]) {
+  server.registerTool(name, offlineSchemas[name], async () => textResult(await bridgeCall(name)));
+}
 
 function buildServer() {
   const mcp = new McpServer(
@@ -191,7 +157,18 @@ function buildServer() {
       },
     },
   );
-  for (const [name, config, handler] of registrations) mcp.registerTool(name, config, handler);
+  for (const [name, , handler] of registrations) {
+    if (!offlineSchemas[name]) continue;
+    if (name.startsWith("project_") && !process.env.TE1000_WRITE_SOLUTION_PATH) continue;
+    mcp.registerTool(name, offlineSchemas[name], async (params) => {
+      try {
+        if (name === "plc_pou" && ["create", "set_decl", "set_impl"].includes(params.action))
+          return textResult(await bridgeCall("plc_pou_" + params.action, params));
+        return await handler(params);
+      }
+      catch (error) { return { isError: true, content: [{ type: "text", text: error.message }] }; }
+    });
+  }
   return mcp;
 }
 
@@ -202,7 +179,7 @@ server.registerTool(
     const payload = { mode };
     if (action === "open_solution") {
       need({ solutionPath }, ["solutionPath"], action);
-      Object.assign(payload, { solutionPath, visible: true, closeExisting: closeExisting || false, discardChanges: discardChanges === true, mode: mode || "activeOrCreate" });
+      Object.assign(payload, { solutionPath, visible: true, closeExisting: closeExisting || false, discardChanges: discardChanges === true });
     }
     if (action === "list_commands") Object.assign(payload, { filter, limit });
     if (action === "error_list") Object.assign(payload, { limit, severityFilter });
@@ -407,42 +384,6 @@ server.registerTool(
         need(p, ["linkedTask"], p.action);
         return textResult(await bridgeCall("tc_task_set_linked_task", { path: p.path, linkedTask: p.linkedTask, save: p.save === true }));
     }
-  },
-);
-
-server.registerTool(
-  "plc_download",
-  toolSchemas.plc_download,
-  async (params) => {
-    if (params.confirm !== PLC_DOWNLOAD_CONFIRMATION) {
-      throw new Error('Blocked. plc_download deploys a boot project to the live target. Re-run with confirm="' + PLC_DOWNLOAD_CONFIRMATION + '" to proceed.');
-    }
-    let logoutNote = null;
-    if (params.autoLogout !== false) {
-      const st = await sessionCall("status");
-      if (st && st.loggedIn) {
-        const lo = await sessionCall("logout");
-        logoutNote = lo && lo.loggedIn === false
-          ? "auto-logout: IDE was logged in; logged out before deploy so deferred source edits are applied (not logged back in)."
-          : "auto-logout requested but the IDE still appears logged in — deploy may not include deferred source edits.";
-      }
-    }
-    const data = await bridgeCall("plc_download", params);
-    if (logoutNote && data && typeof data === "object") data.autoLogout = logoutNote;
-    return textResult(data);
-  },
-);
-
-server.registerTool(
-  "plc_session",
-  toolSchemas.plc_session,
-  async ({ action, confirm }) => {
-    if (action === "logout" && confirm !== PLC_LOGOUT_CONFIRMATION) {
-      throw new Error(`Blocked. Re-run with confirm="${PLC_LOGOUT_CONFIRMATION}" to log the PLC out (the IDE Login button is never invoked — no auto-login).`);
-    }
-    const data = await sessionCall(action);
-    if (!data) throw new Error("plc-session helper failed, or XAE is not reachable via UI Automation.");
-    return textResult(data);
   },
 );
 

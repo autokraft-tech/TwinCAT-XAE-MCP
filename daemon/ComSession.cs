@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 
@@ -15,23 +17,162 @@ namespace Te1000Daemon
         private dynamic _sysManager;
         private string _progId;
         private string _mode;
-        private bool _stale;
+        private bool _owned;
+        private int _xaePid;
+        private long _xaeStartTicks;
+        private int _openCount;
+        private System.Threading.Mutex _ownerMutex;
+        private string _initializationError;
+        private string _initializationStage = "DTE acquisition";
+        private string _lease;
+        private bool _recoveredStateChecked;
+        public Action<int> ProcessIdentified;
 
-        public void MarkStale() { _stale = true; _dte = null; _sysManager = null; }
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+
+        public int XaePid { get { return _xaePid; } }
+        private ProjectSaveAudit _saveAudit;
+        internal ProjectSaveAudit SaveAudit { get { return _saveAudit ?? (_saveAudit = new ProjectSaveAudit(OfflinePolicy.SolutionPath)); } }
+        internal void BeforeObjectWrite(string path, bool create, int type = 604)
+        {
+            AssertRecoveredSaved();
+            foreach (dynamic document in _dte.Documents)
+                if (!(bool)document.Saved) throw new BridgeException("Unsaved editor document detected; preserve user edits before MCP writes.");
+            SaveAudit.BeforeObjectWrite(path, create, type);
+        }
+        internal Json.JObj SaveAudited()
+        {
+            AssertSolution();
+            AssertRecoveredSaved();
+            string root = Path.GetDirectoryName(Path.GetFullPath(OfflinePolicy.SolutionPath)) + Path.DirectorySeparatorChar;
+            foreach (dynamic project in _dte.Solution.Projects)
+                if (!Path.GetFullPath((string)project.FullName).StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    throw new BridgeException("SaveAll scope contains a project outside the pinned solution directory.");
+            foreach (dynamic document in _dte.Documents)
+                if (!(bool)document.Saved)
+                    throw new BridgeException("Unsaved editor document detected; SaveAll could overwrite user edits. Save refused.");
+            return SaveAudit.Save(delegate { _dte.ExecuteCommand("File.SaveAll"); });
+        }
+        internal void AssertRecoveredSaved()
+        {
+            SaveAudit.AssertUnblocked();
+            if (!SaveAudit.Recovered || _recoveredStateChecked) return;
+            try { AssertSaved(); }
+            catch (Exception ex) { SaveAudit.Block("Recovered XAE has unproven unsaved state: " + ex.Message); throw; }
+            _recoveredStateChecked = true;
+        }
+        public bool CloseOwned()
+        {
+            if (OfflinePolicy.SamePath(OfflinePolicy.SolutionPath, OfflinePolicy.WriteSolutionPath)) SaveAudit.AssertCanCloseOrCreate();
+            if (_dte == null || !_owned || !ProcessAlive()) return false;
+            AssertSolution();
+            AssertSaved();
+            _dte.Solution.Close(false);
+            _dte.Quit();
+            try
+            {
+                using (var process = Process.GetProcessById(_xaePid))
+                    if (!process.WaitForExit(10000)) throw new BridgeException("Owned XAE exit not yet confirmed; preserve lease and diagnose.");
+            }
+            catch (ArgumentException) { } // The identified process has already exited.
+            File.WriteAllLines(_lease, LeaseFields("closed"));
+            _owned = false;
+            return true;
+        }
+        private void AssertSaved()
+        {
+            if (!(bool)_dte.Solution.Saved) throw new BridgeException("Owned solution has unsaved changes; refusing shutdown.");
+            foreach (dynamic project in _dte.Solution.Projects)
+                if (!(bool)project.Saved) throw new BridgeException("Owned project has unsaved changes; refusing shutdown.");
+            foreach (dynamic document in _dte.Documents)
+                if (!(bool)document.Saved) throw new BridgeException("Owned document has unsaved changes; refusing shutdown.");
+        }
+        public Json.JObj Info()
+        {
+            var info = new Json.JObj();
+            info["xaePid"] = _xaePid;
+            info["daemonPid"] = Process.GetCurrentProcess().Id;
+            info["owned"] = _owned;
+            info["mode"] = _mode;
+            info["solutionOpenCount"] = _openCount;
+            info["xaeStartTicks"] = _xaeStartTicks.ToString();
+            info["identity"] = LifecycleIdentity.Info();
+            return info;
+        }
+
+        private bool ProcessAlive()
+        {
+            try { using (var p = Process.GetProcessById(_xaePid)) return !p.HasExited && p.StartTime.ToUniversalTime().Ticks == _xaeStartTicks; }
+            catch (ArgumentException) { return false; }
+        }
+
+        private void RecordProcess()
+        {
+            uint pid;
+            GetWindowThreadProcessId(new IntPtr((long)_dte.MainWindow.HWnd), out pid);
+            if (pid == 0) throw new BridgeException("Cannot identify XAE process; refusing an unowned session.");
+            _xaePid = (int)pid;
+            using (var p = Process.GetProcessById(_xaePid))
+            {
+                if (p.SessionId != LifecycleIdentity.SessionId) throw new BridgeException("Cross-session XAE rejected.");
+                _xaeStartTicks = p.StartTime.ToUniversalTime().Ticks;
+            }
+            if (ProcessIdentified != null) ProcessIdentified(_xaePid);
+        }
+
+        public void AssertSolution()
+        {
+            string actual = (string)_dte.Solution.FullName;
+            if (!OfflinePolicy.SamePath(actual, OfflinePolicy.SolutionPath))
+                throw new BridgeException("Wrong solution; expected '" + OfflinePolicy.SolutionPath + "', actual '" + actual + "'. No operation performed.");
+        }
+
+        public void OpenPinnedSolution(bool reload)
+        {
+            if (reload)
+            {
+                if (!_owned) throw new BridgeException("Cannot close a user-owned XAE solution.");
+                OfflinePolicy.AssertWritableSolution();
+                AssertSolution();
+                SaveAudited();
+                _dte.Solution.Close(false);
+                _sysManager = null;
+            }
+            else
+            {
+                string current = (string)_dte.Solution.FullName;
+                if (!string.IsNullOrEmpty(current)) { AssertSolution(); return; }
+                if (!_owned) throw new BridgeException("Will not open a solution in a user-owned XAE instance.");
+            }
+            _initializationStage = "Solution.Open";
+            Log.Write("Opening pinned solution: " + OfflinePolicy.SolutionPath);
+            _dte.Solution.Open(OfflinePolicy.SolutionPath);
+            _openCount++;
+            var deadline = DateTime.UtcNow.AddSeconds(90);
+            do
+            {
+                try
+                {
+                    string actual = (string)_dte.Solution.FullName;
+                    if (!string.IsNullOrEmpty(actual)) { AssertSolution(); return; }
+                }
+                catch (Exception ex) { if (!ComHelpers.IsRetryableComError(ex) && !(ex is Microsoft.CSharp.RuntimeBinder.RuntimeBinderException)) throw; }
+                System.Threading.Thread.Sleep(250);
+            } while (DateTime.UtcNow < deadline);
+            throw new BridgeException("Timed out waiting for the pinned solution.");
+        }
 
         // Best-effort release of a COM RCW. Guards against already-released RCWs
         // and non-COM objects (Marshal.ReleaseComObject throws ArgumentException
         // on a non-COM object, InvalidComObjectException on an already-released
-        // one). Loops ReleaseComObject down to a zero ref count so the underlying
-        // proxy is actually torn down (a dynamic/dispatch RCW can hold >1 ref).
+        // one). Release our reference once; never over-release a shared RCW.
         private static void SafeRelease(object com)
         {
             if (com == null) return;
             try
             {
                 if (!Marshal.IsComObject(com)) return;
-                int rc;
-                do { rc = Marshal.ReleaseComObject(com); } while (rc > 0);
+                Marshal.ReleaseComObject(com);
             }
             catch { /* already released / not a COM RCW — ignore */ }
         }
@@ -39,30 +180,42 @@ namespace Te1000Daemon
         // Return a live, cached DTE for (progId, mode); reconnect if stale/dead.
         public dynamic GetDte(string progId, string mode, bool visible = true)
         {
-            if (string.IsNullOrWhiteSpace(progId)) progId = "TcXaeShell.DTE.17.0";
-            if (string.IsNullOrWhiteSpace(mode)) mode = "active";
+            progId = OfflinePolicy.ProgId;
+            mode = OfflinePolicy.SessionMode;
+            if (_initializationError != null) throw new BridgeException(_initializationError);
 
-            if (_dte != null && !_stale && _progId == progId)
+            if (_dte != null && _progId == progId)
             {
-                if (IsDteAlive(_dte)) return _dte;
-                _dte = null; _sysManager = null;
+                if (ProcessAlive())
+                {
+                    // A busy live XAE must never cause a second instance to start.
+                    AssertSolution();
+                    return _dte;
+                }
+                _initializationError = "XAE process lost; no automatic replacement. Inspect audit and lease before operator restart.";
+                throw new BridgeException(_initializationError);
             }
 
-            _dte = AcquireDte(progId, mode, visible);
-            _progId = progId;
-            _mode = mode;
-            _sysManager = null;
-            _stale = false;
+            try
+            {
+                _dte = AcquireDte(progId, mode, visible);
+                _progId = progId;
+                _mode = mode;
+                _sysManager = null;
+                RecordProcess();
+                if (_owned) OpenPinnedSolution(false);
+                AssertSolution();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Session initialization at " + _initializationStage, ex);
+                _initializationError = "Session initialization failed at " + _initializationStage + "; restart daemon after resolving: " + ex.Message;
+                throw new BridgeException(_initializationError);
+            }
             return _dte;
         }
 
-        private static bool IsDteAlive(dynamic dte)
-        {
-            try { var _ = dte.Name; return true; }   // cheap property read
-            catch { return false; }
-        }
-
-        // Get-Dte (L533-579): modes active / create / activeOrCreate.
+        // The mode is fixed at daemon startup, never by a tool request.
         private dynamic AcquireDte(string progId, string mode, bool visible)
         {
             switch (mode)
@@ -73,22 +226,78 @@ namespace Te1000Daemon
                     if (d != null) return d;
                     return Marshal.GetActiveObject(progId);
                 }
-                case "create":
-                    return CreateDte(progId, visible);
-                case "activeOrCreate":
-                    try
-                    {
-                        dynamic d = GetPreferredDteFromRot(progId);
-                        if (d != null) return d;
-                        return Marshal.GetActiveObject(progId);
-                    }
-                    catch
-                    {
-                        return CreateDte(progId, visible);
-                    }
+                case "createOnce":
+                    return CreateOwnedDte(progId, visible);
                 default:
                     throw new BridgeException("Unsupported DTE mode: " + mode);
             }
+        }
+
+        private dynamic CreateOwnedDte(string progId, bool visible)
+        {
+            // A persisted ownership lease prevents duplicate XAE after daemon failure.
+            string key;
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+                key = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(OfflinePolicy.SolutionPath).ToUpperInvariant()))).Replace("-", "");
+            if (_ownerMutex == null)
+            {
+                _ownerMutex = new System.Threading.Mutex(false, "Global\\NexPlcXae_" + key);
+                bool acquired;
+                try { acquired = _ownerMutex.WaitOne(0); } catch (System.Threading.AbandonedMutexException) { acquired = true; }
+                if (!acquired) throw new BridgeException("Another daemon owns this solution's createOnce session.");
+            }
+            string leaseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexPlcXaeMcp");
+            Directory.CreateDirectory(leaseDir);
+            string lease = Path.Combine(leaseDir, key + ".lease");
+            _lease = lease;
+            if (File.Exists(lease))
+            {
+                string[] fields = File.ReadAllLines(lease);
+                int pid; long ticks;
+                if (fields.Length != 7 || fields[2] != LifecycleIdentity.SessionId.ToString() || fields[3] != LifecycleIdentity.UserSid ||
+                    fields[4] != LifecycleIdentity.PipeName || !OfflinePolicy.SamePath(fields[5], OfflinePolicy.SolutionPath) ||
+                    !int.TryParse(fields[0], out pid) || !long.TryParse(fields[1], out ticks))
+                    throw new BridgeException("Invalid XAE ownership lease: " + lease);
+                bool alive = false;
+                try { using (var p = Process.GetProcessById(pid)) alive = !p.HasExited && p.StartTime.ToUniversalTime().Ticks == ticks; }
+                catch (ArgumentException) { }
+                if (alive)
+                {
+                    RotEntry recovered = null;
+                    foreach (var entry in ListRunningDte(progId))
+                    {
+                        uint entryPid;
+                        GetWindowThreadProcessId(new IntPtr((long)entry.Dte.MainWindow.HWnd), out entryPid);
+                        if (entryPid == pid && fields[6] == "owned" && OfflinePolicy.SamePath(entry.Solution, OfflinePolicy.SolutionPath))
+                        { recovered = entry; }
+                        else SafeRelease((object)entry.Dte);
+                    }
+                    if (recovered != null) { _owned = true; return recovered.Dte; }
+                    throw new BridgeException("Owned XAE PID " + pid + " is still alive but cannot be reattached. Close that instance manually before restarting; no duplicate was created.");
+                }
+                if (fields[6] != "closed") throw new BridgeException("Owned XAE was lost without audited shutdown; no replacement will be created. Preserve lease/journal.");
+            }
+            if (OfflinePolicy.SamePath(OfflinePolicy.SolutionPath, OfflinePolicy.WriteSolutionPath)) SaveAudit.AssertCanCloseOrCreate();
+            // If COM creation crashes before the PID is known, an invalid/pending
+            // lease forces operator review instead of starting a duplicate XAE.
+            File.WriteAllLines(lease, new[] { "pending", Process.GetCurrentProcess().Id.ToString() });
+            dynamic created = CreateDte(progId, visible);
+            _dte = created;
+            _owned = true;
+            RecordProcess();
+            File.WriteAllLines(lease, LeaseFields("owned"));
+            _initializationStage = "TcRemoteManager lookup";
+            Log.Write("Created owned XAE PID " + _xaePid + "; selecting engineering version " + OfflinePolicy.XaeVersion);
+            dynamic remote = created.GetObject("TcRemoteManager");
+            _initializationStage = "TcRemoteManager.Version";
+            remote.Version = OfflinePolicy.XaeVersion;
+            return created;
+        }
+
+        private string[] LeaseFields(string state)
+        {
+            return new[] { _xaePid.ToString(), _xaeStartTicks.ToString(), LifecycleIdentity.SessionId.ToString(), LifecycleIdentity.UserSid,
+                LifecycleIdentity.PipeName, Path.GetFullPath(OfflinePolicy.SolutionPath), state };
         }
 
         private dynamic CreateDte(string progId, bool visible)
@@ -117,19 +326,19 @@ namespace Te1000Daemon
                     if (!string.IsNullOrWhiteSpace(e.Solution) && string.Equals(e.Solution, preferred, StringComparison.OrdinalIgnoreCase))
                     { chosen = e; break; }
             }
-            if (chosen == null)
+            if (chosen == null && string.IsNullOrWhiteSpace(preferred))
             {
                 foreach (var e in entries)
                     if (!string.IsNullOrWhiteSpace(e.Solution)) { chosen = e; break; }
             }
-            if (chosen == null) chosen = entries[0];
+            if (chosen == null && string.IsNullOrWhiteSpace(preferred)) chosen = entries[0];
 
             // Release the DTE RCWs of every ROT entry we did NOT return; only the
             // chosen one survives (the caller takes ownership of it).
             foreach (var e in entries)
                 if (!ReferenceEquals(e, chosen)) SafeRelease((object)e.Dte);
 
-            return chosen.Dte;
+            return chosen == null ? null : chosen.Dte;
         }
 
         private sealed class RotEntry { public string DisplayName; public string Solution; public dynamic Dte; }
@@ -140,47 +349,44 @@ namespace Te1000Daemon
         private List<RotEntry> ListRunningDte(string progId)
         {
             var result = new List<RotEntry>();
-            IRunningObjectTable rot;
-            if (GetRunningObjectTable(0, out rot) != 0 || rot == null) return result;
-            IBindCtx bindCtx;
-            if (CreateBindCtx(0, out bindCtx) != 0 || bindCtx == null) return result;
-            IEnumMoniker enumMoniker;
-            rot.EnumRunning(out enumMoniker);
-            if (enumMoniker == null) return result;
-
-            var monikers = new IMoniker[1];
-            while (enumMoniker.Next(1, monikers, IntPtr.Zero) == 0)
+            IRunningObjectTable rot = null;
+            IBindCtx bindCtx = null;
+            IEnumMoniker enumerator = null;
+            try
             {
-                string displayName = "";
-                try { monikers[0].GetDisplayName(bindCtx, null, out displayName); }
-                catch { displayName = ""; }
-
-                if (string.IsNullOrWhiteSpace(displayName) ||
-                    displayName.IndexOf(progId, StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-
-                try
+                if (GetRunningObjectTable(0, out rot) != 0 || rot == null) return result;
+                if (CreateBindCtx(0, out bindCtx) != 0 || bindCtx == null) return result;
+                rot.EnumRunning(out enumerator);
+                if (enumerator == null) return result;
+                var monikers = new IMoniker[1];
+                while (enumerator.Next(1, monikers, IntPtr.Zero) == 0)
                 {
-                    object raw;
-                    rot.GetObject(monikers[0], out raw);
-                    if (raw == null) continue;
-                    dynamic dte = raw;
-                    string solution = "";
-                    try { solution = dte.Solution != null ? (string)dte.Solution.FullName : ""; }
-                    catch { solution = ""; }
-                    result.Add(new RotEntry { DisplayName = displayName, Solution = solution, Dte = dte });
+                    object raw = null;
+                    try
+                    {
+                        string name;
+                        monikers[0].GetDisplayName(bindCtx, null, out name);
+                        if (string.IsNullOrWhiteSpace(name) || name.IndexOf(progId, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        rot.GetObject(monikers[0], out raw);
+                        if (raw == null) continue;
+                        dynamic candidate = raw;
+                        string solution = (string)candidate.Solution.FullName;
+                        result.Add(new RotEntry { DisplayName = name, Solution = solution, Dte = candidate });
+                        raw = null; // Result takes ownership of this reference.
+                    }
+                    catch (Exception ex) { Log.Error("ROT candidate", ex); }
+                    finally { SafeRelease(raw); SafeRelease(monikers[0]); monikers[0] = null; }
                 }
-                catch { }
+                return result;
             }
-            return result;
+            finally { SafeRelease(enumerator); SafeRelease(bindCtx); SafeRelease(rot); }
         }
-
         // Get-SysManager (L623-676): prefer the loaded .tsproj project Object
         // (stays bound to the live config), else DTE.GetObject('TcSysManager').
         // Cached; retries transient RPC busy.
         public dynamic GetSysManager()
         {
-            if (_sysManager != null && !_stale)
+            if (_sysManager != null)
             {
                 if (IsSysManagerAlive(_sysManager)) return _sysManager;
                 _sysManager = null;
@@ -201,8 +407,8 @@ namespace Te1000Daemon
                             if (project == null) continue;
                             string fullName = null;
                             try { fullName = (string)project.FullName; } catch { }
-                            if (string.IsNullOrWhiteSpace(fullName) ||
-                                !fullName.EndsWith(".tsproj", StringComparison.OrdinalIgnoreCase))
+                            if ((string)project.Name != OfflinePolicy.ProjectName ||
+                                !OfflinePolicy.SamePath(fullName, Path.Combine(Path.GetDirectoryName(OfflinePolicy.SolutionPath), OfflinePolicy.ProjectName + ".tsproj")))
                                 continue;
                             dynamic projectObject = null;
                             try { projectObject = project.Object; } catch { }
@@ -216,10 +422,7 @@ namespace Te1000Daemon
                             catch { }
                         }
                     }
-                    dynamic sm = _dte.GetObject("TcSysManager");
-                    if (sm == null) throw new BridgeException("TcSysManager is null");
-                    _sysManager = sm;
-                    return _sysManager;
+                    throw new BridgeException("Configured System Manager project is not loaded yet.");
                 }
                 catch (BridgeException) { if (attempt >= 40) throw; System.Threading.Thread.Sleep(500); }
                 catch (Exception ex)
@@ -250,8 +453,7 @@ namespace Te1000Daemon
         {
             try { Te1000MessageFilter.Revoke(); } catch { }
             // Release the cached proxies before dropping references so the COM RCWs
-            // are torn down rather than leaked until GC. MarkStale() may already
-            // have nulled these (recycle path) — SafeRelease(null) is a no-op.
+            // are torn down rather than leaked until GC.
             object sm = (object)_sysManager;
             object dte = (object)_dte;
             _sysManager = null; _dte = null;
@@ -261,6 +463,7 @@ namespace Te1000Daemon
             // can disturb the running IDE. We acquired our own RCW ref though, so a
             // single balanced release is correct either way — release it.
             SafeRelease(dte);
+            if (_ownerMutex != null) { try { _ownerMutex.ReleaseMutex(); } catch { } _ownerMutex.Dispose(); _ownerMutex = null; }
         }
     }
 }

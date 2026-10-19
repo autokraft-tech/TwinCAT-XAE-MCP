@@ -1,33 +1,8 @@
 ---
 name: Bug report
-about: Something the server does wrong, or a TwinCAT operation that fails
-title: "[bug] "
-labels: bug
+about: Report a reproducible offline XAE MCP problem
 ---
 
-## What happened
+Describe observed/expected behavior, affected commit, Windows/XAE/Node versions and a sanitized minimal reproduction. Include error types and test results.
 
-A clear description of the bug.
-
-## To reproduce
-
-The tool call(s) and arguments, e.g.:
-
-```text
-tc_tree   action: "get_xml"   path: "TIID^Device 2 (EtherCAT)^Box 1"
-```
-
-## Expected behaviour
-
-What you expected instead.
-
-## Environment
-
-- te1000-mcp version / commit:
-- TwinCAT XAE Shell version & ProgID (`TE1000_PROGID`):
-- Node.js version:
-- MCP client:
-
-## Logs / dialog text
-
-Any error returned by the tool, or the title/body of a reported XAE dialog.
+Do not attach PLC sources, audit archives, credentials or machine configuration. For unknown writes preserve the journal and stop retries. See [troubleshooting](../../docs/TROUBLESHOOTING.md) and [security](../../SECURITY.md).

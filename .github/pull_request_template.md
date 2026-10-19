@@ -1,22 +1,7 @@
-## Summary
+## Behavior
 
-What this change does and why.
+Describe the concrete problem and resulting behavior. Preserve offline policies and configuration compatibility.
 
-## Changes
+## Validation
 
--
-
-## Verification
-
-How you tested this (check all that apply):
-
-- [ ] `npm run check` passes (syntax)
-- [ ] Ran against a live XAE Shell
-- [ ] Build green in a real TwinCAT project
-- [ ] Docs updated ([tool reference](../docs/tools.md), README, [CHANGELOG](../CHANGELOG.md))
-
-## Safety checklist
-
-- [ ] Any live-target / destructive / licensing action is confirmation-gated
-- [ ] No new path writes toward the safety project (`TISC` refused)
-- [ ] No destructive prompt added to the dialog allowlist
+Record checks from [testing](../docs/TESTING.md), distinguishing fixtures from real XAE. State remaining limits and confirm no production deployment or runtime/engineering artifacts are included.

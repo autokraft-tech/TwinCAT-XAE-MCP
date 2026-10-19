@@ -252,6 +252,7 @@ namespace Te1000Daemon
     // decide a call is hung on a modal dialog.
     public sealed class DialogWatcher
     {
+        public volatile int TargetPid;
         private readonly string[] _processNames;
         private readonly int _pollMs;
         private readonly bool _autoDismiss;
@@ -412,6 +413,9 @@ namespace Te1000Daemon
         // allowlisted dialog when doDismiss is true.
         public DialogSnapshot Probe(bool doDismiss)
         {
+            // Only observe the current session, never another user's XAE.
+            if (TargetPid <= 0) return new DialogSnapshot { Found = false, Blocking = false, Ts = NowMs() };
+            doDismiss = false;
             DlgWin dlg = null;
             foreach (var name in _processNames)
             {
@@ -419,6 +423,7 @@ namespace Te1000Daemon
                 {
                     try
                     {
+                        if (proc.Id != TargetPid) continue;
                         var hits = DlgWatch.Find((uint)proc.Id);
                         if (hits != null && hits.Count > 0) { dlg = hits[0]; break; }
                     }
@@ -458,7 +463,7 @@ namespace Te1000Daemon
                 // a still-blocking result means the click failed. When only reporting
                 // (doDismiss:false), a dialog the watcher will auto-dismiss is NOT a
                 // persistent block; a disruptive dialog (never auto-clicked) always is.
-                Blocking = doDismiss ? !dismissed : !willAutoDismiss,
+                Blocking = !dismissed,
                 Dismissed = dismissed,
                 DismissedButton = dismissedButton,
                 Title = title,

@@ -1,11 +1,21 @@
 {
-  "//": "Drop-in MCP client config for te1000-mcp. Edit the path to point at index.js in your clone.",
   "mcpServers": {
-    "te1000": {
-      "command": "node",
-      "args": ["C:\\path\\to\\TwinCAT-XAE-MCP\\index.js"],
+    "nexplc_xae": {
+      "disabled": true,
+      "command": "<NODE_EXE>",
+      "args": [
+        "<MCP_REPOSITORY>/index.js"
+      ],
       "env": {
-        "//TE1000_PROGID": "TcXaeShell.DTE.17.0 — set only if your XAE Shell ProgID differs"
+        "TE1000_DAEMON_EXE": "<DAEMON_EXE>",
+        "TE1000_DAEMON_PIPE": "nexplc-readonly-example",
+        "TE1000_SESSION_MODE": "createOnce",
+        "TE1000_MCP_SOLUTION_PATH": "<SOLUTION>",
+        "TE1000_PROJECT_NAME": "<SYSTEM_MANAGER_PROJECT>",
+        "TE1000_PLC_ROOT": "<PLC_ROOT>",
+        "TE1000_DIALOG_AUTODISMISS": "0",
+        "TE1000_WRITE_SOLUTION_PATH": "",
+        "TE1000_WRITE_ROOTS": ""
       }
     }
   }

@@ -7,7 +7,7 @@ const path = require("path");
 
 const PIPE = "te1000-test-" + process.pid;
 const PIPE_PATH = "\\\\.\\pipe\\" + PIPE;
-const EXE = path.join(__dirname, "bin", "Release", "Te1000Daemon.exe");
+const EXE = process.env.TE1000_DAEMON_EXE || path.join(__dirname, "bin", "Release", "Te1000Daemon.exe");
 
 function connect(timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -42,7 +42,7 @@ function rpc(sock, obj) {
 }
 
 (async () => {
-  const child = spawn(EXE, ["--pipe", PIPE, "--no-watch"], { stdio: "ignore", detached: true });
+  const child = spawn(EXE, ["--pipe", PIPE, "--no-watch"], { stdio: "ignore", detached: true, windowsHide: true });
   child.unref();
   let sock;
   try {

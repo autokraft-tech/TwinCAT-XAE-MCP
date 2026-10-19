@@ -1,0 +1,25 @@
+# Disabled template. Replace placeholders before enabling.
+[mcp_servers.nexplc_xae_dev]
+enabled = false
+command = '<NODE_EXE>'
+args = ['<MCP_REPOSITORY>\index.js']
+startup_timeout_sec = 30
+tool_timeout_sec = 240
+
+[mcp_servers.nexplc_xae_dev.env]
+TE1000_DAEMON_EXE = '<DAEMON_EXE>'
+TE1000_DAEMON_PIPE = 'nexplc-p4-dev-example'
+TE1000_SESSION_MODE = 'createOnce'
+TE1000_PROGID = 'TcXaeShell.DTE.17.0'
+TE1000_XAE_VERSION = '3.1.4026.20'
+TE1000_MCP_SOLUTION_PATH = '<SOLUTION>'
+TE1000_PROJECT_NAME = '<SYSTEM_MANAGER_PROJECT>'
+TE1000_PLC_ROOT = '<PLC_ROOT>'
+TE1000_DIALOG_AUTODISMISS = '0'
+TE1000_DAEMON_AUTOSTART = '0'
+TE1000_OWNER_SID = '<PROFILE_USER_SID>'
+TE1000_OWNER_SESSION_ID = '<PROFILE_SESSION_ID>'
+TE1000_WRITE_SOLUTION_PATH = '<SOLUTION>'
+TE1000_WRITE_ROOTS = '<PLC_ROOT>^03_POUs^FB_Example;<PLC_ROOT>^01_DUTs^ST_Example;<PLC_ROOT>^01_DUTs^E_Example;<PLC_ROOT>^04_GVLs^GVL_Example'
+TE1000_PLC_WRITE_TYPES = '604;609;606;605;615'
+TE1000_DAEMON_LOG = '<LOCAL_LOG_PATH>'

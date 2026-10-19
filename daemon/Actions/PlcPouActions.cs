@@ -749,7 +749,20 @@ namespace Te1000Daemon
             string declText = ctx.Payload.Str("declText");
             dynamic sm = ctx.SysManager();
             dynamic item = ComHelpers.GetTreeItem(sm, path);
-            PouHelper.SetDeclaration((object)item, declText);
+            int type = ((ITcSmTreeItem)(object)item).ItemType;
+            OfflinePolicy.AssertObjectType(type);
+            AssertDirectMethodParent(sm, path, type);
+            string keyword = type == 609 ? "METHOD" : type == 604 ? "FUNCTION_BLOCK" : "TYPE";
+            Match header = Regex.Match(declText, @"(?i)\A\s*(?:\{[^}]*\}\s*)*" + keyword + @"\s+(?:(?:FINAL|ABSTRACT|PUBLIC|PRIVATE|PROTECTED|INTERNAL)\s+)*([A-Za-z_][A-Za-z0-9_]*)\b");
+            bool gvlHeader = type == 615 && Regex.IsMatch(declText, @"(?i)\A\s*(?:\{[^}]*\}\s*)*VAR_GLOBAL\b");
+            if (type == 615 ? !gvlHeader : !header.Success || header.Groups[1].Value != (string)item.Name)
+                throw new BridgeException("Declaration must preserve the existing PLC object name.");
+            if ((type == 606 && !Regex.IsMatch(declText, @"(?i):\s*STRUCT\b")) || (type == 605 && !Regex.IsMatch(declText, @":\s*\(")) || (type == 623 && Regex.IsMatch(declText, @"(?i):\s*(STRUCT\b|UNION\b|\()")))
+                throw new BridgeException("Declaration must preserve the DUT kind.");
+            AssertContentHash(ctx.Payload, PouHelper.GetDeclaration((object)item), type);
+            ctx.Session.BeforeObjectWrite(path, false, type);
+            try { PouHelper.SetDeclaration((object)item, declText); ctx.Session.SaveAudit.AfterObjectWrite(); }
+            catch (Exception ex) { ctx.Session.SaveAudit.Block("Declaration write outcome requires inspection: " + ex.Message); throw; }
             ctx.Cache.Invalidate(path);
 
             var data = new Json.JObj();
@@ -814,8 +827,15 @@ namespace Te1000Daemon
             dynamic sm = ctx.SysManager();
             dynamic item = ComHelpers.GetTreeItem(sm, path);
             string via = hasText ? "text" : "xml";
-            if (hasText) PouHelper.SetImplementationText((object)item, ctx.Payload.Str("implText"));
-            else PouHelper.SetImplementationXml((object)item, ctx.Payload.Str("implXml"));
+            int type = ((ITcSmTreeItem)(object)item).ItemType;
+            OfflinePolicy.AssertObjectType(type);
+            AssertDirectMethodParent(sm, path, type);
+            if (type != 604 && type != 609) throw new BridgeException("DUTs and GVLs have declarations only; ST implementation writes are disabled.");
+            if (PouHelper.GetImplementationLanguage((object)item) != 1) throw new BridgeException("Only ST code writes are enabled.");
+            AssertContentHash(ctx.Payload, PouHelper.GetImplementation((object)item), type);
+            ctx.Session.BeforeObjectWrite(path, false, type);
+            try { PouHelper.SetImplementationText((object)item, ctx.Payload.Str("implText")); ctx.Session.SaveAudit.AfterObjectWrite(); }
+            catch (Exception ex) { ctx.Session.SaveAudit.Block("ST write outcome requires inspection: " + ex.Message); throw; }
             ctx.Cache.Invalidate(path);
 
             var data = new Json.JObj();
@@ -1272,8 +1292,24 @@ namespace Te1000Daemon
         {
             if (ctx.Payload.Has("save") && ctx.Payload.Bool("save"))
             {
-                ctx.Dte().ExecuteCommand("File.SaveAll");
+                ctx.Session.SaveAudited();
             }
+        }
+
+        private static void AssertContentHash(Json.JObj payload, string text, int type)
+        {
+            string expected = payload.Str("expectedHash");
+            if (expected == null && type == 604) return; // Preserve the validated FB API.
+            if (expected != ProjectSaveAudit.Hash(System.Text.Encoding.UTF8.GetBytes(text)))
+                throw new BridgeException("Content hash mismatch; read the current object before writing.");
+        }
+
+        private static void AssertDirectMethodParent(dynamic sm, string path, int type)
+        {
+            if (type != 609) return;
+            string parent = path.Substring(0, path.LastIndexOf('^'));
+            var item = (ITcSmTreeItem)(object)ComHelpers.GetTreeItem(sm, parent);
+            if (item.ItemType != 604) throw new BridgeException("Only Methods directly under an FB have passed write validation.");
         }
 
         // ---- COM property getters (C#5 closures over dynamic) ---------------
@@ -1328,9 +1364,26 @@ namespace Te1000Daemon
             dynamic parentItem = ComHelpers.GetTreeItem(sm, parent);
             object vInfo = BuildVInfo(subType, language, returnType, extends, implements, declText);
 
-            dynamic child = parentItem.CreateChild(name, subType, before, vInfo);
-            AssertWellFormedChild(parentItem, child, name, subType, parent);
-            return child;
+            // Enumerate authoritatively; do not interpret a failed lookup as absence.
+            ITcSmTreeItem typedParent = (ITcSmTreeItem)(object)parentItem;
+            if (subType == 609 && typedParent.ItemType != 604) throw new BridgeException("A Method must belong directly to the specified FB.");
+            if ((subType == 605 || subType == 606 || subType == 623 || subType == 615) && typedParent.ItemType != 601) throw new BridgeException("A DUT/GVL must belong to a PLC folder.");
+            for (int i = 1; i <= typedParent.ChildCount; i++)
+                if (string.Equals(typedParent.get_Child(i).Name, name, StringComparison.OrdinalIgnoreCase))
+                    throw new BridgeException("PLC object already exists; overwrite is disabled: " + name);
+
+            if (subType == 609) vInfo = new object[] { language, returnType, "PUBLIC" };
+            if (subType == 605 || subType == 606 || subType == 615) vInfo = null;
+            ctx.Session.BeforeObjectWrite(parent + "^" + name, true, subType);
+            try
+            {
+                dynamic child = parentItem.CreateChild(name, subType, before, vInfo);
+                AssertWellFormedChild(parentItem, child, name, subType, parent);
+                if (((ITcSmTreeItem)(object)child).ItemType != subType) throw new BridgeException("CreateChild returned an unexpected PLC object type.");
+                ctx.Session.SaveAudit.AfterObjectWrite();
+                return child;
+            }
+            catch (Exception ex) { ctx.Session.SaveAudit.Block("Create outcome requires inspection: " + ex.Message); throw; }
         }
 
         // ---- Invoke-PlcPouCreateFolder (L2762-2788) -------------------------
@@ -1380,10 +1433,11 @@ namespace Te1000Daemon
                 case 606:
                 case 607:
                 case 615:
-                case 623:
                 case 629:
                     if (string.IsNullOrWhiteSpace(declText)) return null;
                     return declText;
+                case 623:
+                    throw new BridgeException("ALIAS (623) creation is disabled.");
                 default:
                     return null;
             }
@@ -1408,11 +1462,6 @@ namespace Te1000Daemon
             }
 
             if (reason == null) return;
-
-            if (!string.IsNullOrWhiteSpace(childActualName))
-            {
-                try { parent.DeleteChild(childActualName); } catch { }
-            }
 
             throw new BridgeException("CreateChild produced a malformed child (name='" + childActualName + "', path='" + childPath +
                 "') for requested name='" + requestedName + "', subType=" + subType.ToString(CultureInfo.InvariantCulture) +
@@ -1642,6 +1691,7 @@ namespace Te1000Daemon
             var data = new Json.JObj();
             data["path"] = path;
             data["lineCount"] = lineCount;
+            data["contentHash"] = ProjectSaveAudit.Hash(System.Text.Encoding.UTF8.GetBytes(text));
             data["eol"] = eolInfo.Name;
 
             if (hasGrep)
