@@ -44,3 +44,7 @@ TargetNetId、工程/PLC GUID、Task/Runtime、AMS/EtherCAT、TwinCAT 版本不�
 审计在写盘后发生，不能回滚副作用，不是文件事务或防文件所有者篡改的签名系统。Project.Save/ProjectItem.Save 未单独验证，不能作为更安全替代。Flush(true) 不是断电事务保证。
 
 GUI 并发、真实 COM 写超时/晚返回、全部崩溃点、断电及非标准/外链布局尚未完整实测。专用 Dev 避免 GUI 并发修改。见 [生命周期](XAE_LIFECYCLE.md)、[故障排查](TROUBLESHOOTING.md)。
+
+## Output cleanup and recovery evidence
+
+Ordinary temporary reports, build output and disposable task data are not source. Preserve Pending Journals, leases, audit baselines, failure workspaces and audit archives while any running instance, unknown write result, unfinished audit or recovery dependency remains. Prove ownership and the absence of unique user modifications before cleanup; never clear recovery state to make Git clean or bypass a safety lock.

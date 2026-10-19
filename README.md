@@ -15,7 +15,7 @@
 | 独立 Daemon、交互式 Windows 计划任务 | 同一登录会话的启动/复用/安全停止已验证 |
 | ALIAS 623 | 硬禁用，保留失败现场，不重试 |
 
-不提供 PLC 下载、在线控制、ADS 写入、配置激活、任意 DTE 命令或对象删除/移动/重命名。已有文件夹 Method 支持精确启动授权的 ST 更新，逐级验证 601 文件夹和 604 FB 归属；嵌套创建仍禁用。验收范围见 [嵌套方法](docs/NESTED_METHOD_VALIDATION.md)。部分上游 handler 保留用于维护比较，不代表已经开放。
+不提供 PLC 下载、在线控制、ADS 写入、配置激活、任意 DTE 命令或对象删除/移动/重命名。已有文件夹 Method 支持精确启动授权的 ST 更新，逐级验证 601 文件夹和 604 FB 归属；嵌套创建仍禁用。验收范围见 [嵌套方法验收要求](docs/TESTING.md#real-xae-acceptance-requirements)。部分上游 handler 保留用于维护比较，不代表已经开放。
 
 ## 架构
 
@@ -105,7 +105,7 @@ $profileFile = '<LOCAL_PROFILE.json>'
 - [开发流程](docs/DEVELOPMENT_WORKFLOW.md)
 - [测试](docs/TESTING.md)
 - [故障排查](docs/TROUBLESHOOTING.md)
-- [ALIAS 故障专题](docs/ALIAS_API_VALIDATION.md)
+- [ALIAS 安全约束](docs/PLC_OBJECT_API.md#nested-method-and-alias-safety-contract)
 - [Agent 规范](AGENTS.md)、[贡献说明](CONTRIBUTING.md)、[安全策略](SECURITY.md)、[示例](examples/README.md)
 
 本 Fork 保留上游 Edge Automation 署名和 MIT 许可，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

@@ -26,3 +26,11 @@ Desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# Temporary Codex outputs; maintained docs and source configs remain visible.
+/.codex-output/
+/.codex-tmp/
+/local-reports/
+/docs/ALIAS_API_VALIDATION.md
+/docs/NESTED_METHOD_VALIDATION.md
+/docs/SINGLE_CHECKOUT_VALIDATION.md

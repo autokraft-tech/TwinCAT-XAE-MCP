@@ -71,3 +71,11 @@ preview 不能预测全部 COM 副作用。保存后检查 audit 的 safe/saved�
 随后 xae.error_list 查看诊断。构建也审计，之后可能需再次 SaveAll 形成恢复基线。MCP 使用 isError，管道使用 ok:false/error/errorKind；COM 成功不代表审计通过。未知结果/pending/blocked 时停止写入，不重试或清锁。
 
 接口参考：[Beckhoff 对象创建](https://infosys.beckhoff.com/content/1033/tc3_automationinterface/21842468363.html)、[声明与实现](https://infosys.beckhoff.com/content/1033/tc3_automationinterface/21842480395.html)。见 [保存安全](XAE_SAVE_SAFETY.md)。
+
+## Nested Method and ALIAS safety contract
+
+Existing folder Methods require the exact startup-authorized path and type 609; a parent FB permission does not authorize them. The daemon verifies each actual COM Parent/PathName, all 601 folders and the owning 604 FB up to the configured POUs. ST language and full-content expectedHash remain mandatory. Profile metadata inspection refuses folder roots and nonexistent deep Methods; runtime COM ancestry remains authoritative. Nonstandard project layouts and nested creation remain unsupported.
+
+Method auditing maps to the actual owning FB file and identifies the exact Method name plus FolderPath. Parent code, sibling Methods, folder metadata, GUIDs and Compile references remain protected. Multi-folder COM behavior requires its own real XAE specimen before being called verified; parser/ancestry fixtures alone do not establish COM support.
+
+ALIAS 623 is unsupported and hard-disabled in the schema, raw-pipe daemon policy and internal creation builder; startup type configuration cannot enable it. CLR array shape or support for another DUT is not proof of ALIAS COM support. Do not retry failed experiments, synthesize XML/GUIDs, overwrite hashes, change pipes/restart or clear journals to bypass a failed/unknown result. Further ALIAS research requires separate explicit authorization, official-interface verification and a complete independently authorized XAE acceptance flow.
