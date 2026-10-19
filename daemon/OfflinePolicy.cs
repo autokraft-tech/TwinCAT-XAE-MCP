@@ -59,6 +59,13 @@ namespace Te1000Daemon
             throw new BridgeException("PLC object is outside TE1000_WRITE_ROOTS: " + path);
         }
 
+        public static void AssertMethodWritePath(string path, string owner)
+        {
+            AssertWritePath(path);
+            if (path.Substring(0, path.LastIndexOf('^')) != owner && Array.IndexOf(WriteRoots, path) < 0)
+                throw new BridgeException("Folder Methods require an exact startup-authorized object path.");
+        }
+
         public static void Validate(string action, Json.JObj p)
         {
             if (!Actions.Contains(action)) throw new BridgeException("Disabled by offline policy: " + action);

@@ -161,7 +161,7 @@ namespace Te1000Daemon
             var hashes = new Json.JObj(); foreach (var file in files.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)) hashes[file.Key] = Hash(file.Value); return hashes;
         }
 
-        public void BeforeObjectWrite(string path, bool create, int type = 604)
+        public void BeforeObjectWrite(string path, bool create, int type = 604, string methodOwner = null)
         {
             Begin();
             string prefix = OfflinePolicy.PlcRoot + "^";
@@ -170,8 +170,11 @@ namespace Te1000Daemon
             string method = null;
             if (type == 609)
             {
-                int split = objectPath.LastIndexOf('^');
-                method = objectPath.Substring(split + 1); objectPath = objectPath.Substring(0, split);
+                string owner = methodOwner ?? path.Substring(0, path.LastIndexOf('^'));
+                if (!owner.StartsWith(prefix, StringComparison.Ordinal) || !path.StartsWith(owner + "^", StringComparison.Ordinal))
+                    throw new BridgeException("Invalid audited Method owner.");
+                method = path.Substring(owner.Length + 1);
+                objectPath = owner.Substring(prefix.Length);
             }
             string extension = type == 615 ? ".TcGVL" : type == 605 || type == 606 || type == 623 ? ".TcDUT" : ".TcPOU";
             string relative = Path.Combine("MainPLC", objectPath.Replace('^', Path.DirectorySeparatorChar) + extension);
@@ -324,10 +327,13 @@ namespace Te1000Daemon
                 HashSet<string> methods;
                 if (_methods.TryGetValue(file, out methods))
                 {
-                    foreach (string name in methods)
+                    foreach (string methodPath in methods)
                     {
-                        var oldMethods = a.Descendants().Where(e => e.Name.LocalName == "Method" && (string)e.Attribute("Name") == name).ToList();
-                        var newMethods = b.Descendants().Where(e => e.Name.LocalName == "Method" && (string)e.Attribute("Name") == name).ToList();
+                        string[] parts = methodPath.Split('^');
+                        string name = parts[parts.Length - 1];
+                        string folder = parts.Length == 1 ? "" : string.Join("\\", parts.Take(parts.Length - 1)) + "\\";
+                        var oldMethods = a.Descendants().Where(e => e.Name.LocalName == "Method" && (string)e.Attribute("Name") == name && ((string)e.Attribute("FolderPath") ?? "") == folder).ToList();
+                        var newMethods = b.Descendants().Where(e => e.Name.LocalName == "Method" && (string)e.Attribute("Name") == name && ((string)e.Attribute("FolderPath") ?? "") == folder).ToList();
                         if (newMethods.Count != 1) return "critical_method_identity";
                         if (_newMethods.Contains(file + "^" + name))
                         {
@@ -338,7 +344,9 @@ namespace Te1000Daemon
                         }
                         else
                         {
-                            if (oldMethods.Count != 1) return "critical_method_identity";
+                            Guid oldId, newId;
+                            if (oldMethods.Count != 1 || !Guid.TryParse((string)oldMethods[0].Attribute("Id"), out oldId) ||
+                                !Guid.TryParse((string)newMethods[0].Attribute("Id"), out newId) || oldId != newId) return "critical_method_identity";
                             foreach (var node in oldMethods[0].Elements().Where(e => e.Name.LocalName == "Declaration" || e.Name.LocalName == "Implementation").ToList()) node.Remove();
                             foreach (var node in newMethods[0].Elements().Where(e => e.Name.LocalName == "Declaration" || e.Name.LocalName == "Implementation").ToList()) node.Remove();
                         }

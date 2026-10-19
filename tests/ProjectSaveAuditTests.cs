@@ -66,6 +66,30 @@ internal static class ProjectSaveAuditTests
     }
     private static int Tests()
     {
+        foreach (string folder in new[] { "", "I_Test\\", "I_Test\\Inner\\" })
+        {
+            foreach (string fault in new[] { "none", "guid", "invalid-guid", "folder", "parent", "reference" })
+                Run(audit => {
+                    string id = fault == "invalid-guid" ? "invalid" : "{11111111-0123-0123-0123-012345678901}";
+                    string method = "<Method Name='M_Test' Id='" + id + "' FolderPath='" + folder + "'><Declaration>METHOD M_Test : DINT</Declaration><Implementation><ST>M_Test := 1;</ST></Implementation></Method>";
+                    string source = Pou.Replace("</POU>", method + "</POU>");
+                    Write("MainPLC/03_POUs/FB_Test.TcPOU", source); Git("add .");
+                    Git("-c user.name=Fixture -c user.email=fixture@invalid -c core.hooksPath=NUL commit -q -m method");
+                    string owner = OfflinePolicy.PlcRoot + "^03_POUs^FB_Test";
+                    string target = owner + "^" + folder.Replace('\\', '^') + "M_Test";
+                    audit.BeforeObjectWrite(target, false, 609, owner);
+                    Action save = () => {
+                        string changed = source.Replace("M_Test := 1", "M_Test := 2");
+                        if (fault == "guid") changed = changed.Replace("11111111", "22222222");
+                        if (fault == "folder") changed = changed.Replace("FolderPath='" + folder + "'", "FolderPath='Other\\'");
+                        if (fault == "parent") changed = changed.Replace("value := 1", "value := 9");
+                        if (fault == "reference") Write("MainPLC/MainPLC.plcproj", "<Project><ItemGroup><Compile Include='M_Test.TcPOU'/></ItemGroup></Project>");
+                        Write("MainPLC/03_POUs/FB_Test.TcPOU", changed);
+                    };
+                    if (fault == "none") Check(audit.Save(save).Bool("safe"), "Method code in exact folder must pass");
+                    else Reject(() => audit.Save(save), "Method identity/owner/reference fault must lock: " + fault);
+                });
+        }
         Run(audit => {
             Begin(audit);
             var report = audit.Save(() => { Write("MainPLC/03_POUs/FB_Test.TcPOU", Pou.Replace("value := 1", "value := 2")); Write("fixture.tsproj", Project.Replace("TmcHash='old'", "TmcHash='new'")); });

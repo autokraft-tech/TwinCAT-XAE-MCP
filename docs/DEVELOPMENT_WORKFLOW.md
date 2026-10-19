@@ -28,7 +28,7 @@ $plc = '<PLC_ROOT>'
   -WriteTypes @(604,609,606,605,615)
 ```
 
-生成器只写 UTF-8 本地配置，不安装/启动任务。FB 授权包含子方法；可单独授权某个直接 Method。623、文件夹级权限及 Profile 覆盖被拒绝。
+生成器只写 UTF-8 本地配置，不安装/启动任务。FB 授权保留直接子方法行为；文件夹内已有 Method 必须单独授权完整路径，不能借父 FB 授权。深层授权通过只读检查已有 XAE 文件确认精确对象，写入时再通过 COM 验证实际父级链。623、文件夹级权限及 Profile 覆盖被拒绝。
 
 按 [生命周期](XAE_LIFECYCLE.md) install/start/status/diagnose。将 Profile 完整 env 复制到默认禁用的 [Dev 模板](../examples/nexplc-codex-dev.toml)，保持 connect-only 后启用；不改正式 MCP。
 

@@ -24,7 +24,8 @@ git diff --check
 | daemon-managed-client.test.js | 身份绑定，验证后 socket 替换拒绝写入 |
 | daemon-lifecycle-policy.test.js | 25 项身份/生命周期夹具，含 pending/executing/blocked，无真实 XAE |
 | daemon/test-worker.ps1 | 6 类只读拒绝、20 个同 STA 任务、超时不替换 worker |
-| daemon/test-save-audit.ps1 | 58 项文件夹夹具：GUID/配置/引用/即时写盘/journal/恢复 |
+| daemon/test-save-audit.ps1 | 76 项文件夹夹具：GUID/配置/引用/即时写盘/journal/恢复 |
+| daemon/test-nested-method.ps1 | 25 项嵌套 Method 类型/父链/精确权限/哈希/ST 检查，无 COM |
 | daemon/test-object-creation.ps1 | ALIAS 内部 builder 拒绝，FB 兼容，无 COM |
 | dev-profile.test.ps1 | 权限、主 checkout/脏副本拒绝、UTF-8、完整任务 action 校验，不注册任务 |
 | daemon/test-ping.js | 临时 Daemon，17 工程/20 可发现动作，不操作真实 XAE |
@@ -59,4 +60,4 @@ ST FB、直接 FB Method、STRUCT、ENUM、GVL 分别完成创建/修改、审�
 
 ## 未验证边界
 
-注销/重新登录自动启动、真实另一用户/会话尝试、真实 COM 写超时/晚返回、断电事务、长时间运行、GUI 并发、全部异常崩溃路径、外链/非标准布局及 Method 文件夹写入尚未验收。协议/文件夹模拟不能替代实测。ALIAS 禁用且不得重试失败实验；保存审计不是回滚。
+注销/重新登录自动启动、真实另一用户/会话尝试、真实 COM 写超时/晚返回、断电事务、长时间运行、GUI 并发、全部异常崩溃路径、外链/非标准布局尚未完整实测。Method 文件夹验收见 [记录](NESTED_METHOD_VALIDATION.md)。协议/文件夹模拟不能替代实测。ALIAS 禁用且不得重试失败实验；保存审计不是回滚。

@@ -8,7 +8,7 @@ managed Dev 使用当前用户交互计划任务，独立于客户端持有 Daem
 
 Profile 固定 SID/session、EXE、pipe、Solution、对象/类型和日志，UTF-8 支持中文路径。实际配置留在 ignored artifacts，不提交。新权限使用新干净任务，客户端不能扩权。
 
-helper 针对已验收的 MySPT_Machine/MySPT_Machine.sln 布局及 PLC 根，拒绝主 checkout、脏副本、覆盖 Profile、目录级授权和 623。任务前缀 NexPlcXae-Dev-、管道前缀 nexplc-p4-dev- 是保留兼容协议，不随文档整理改名。
+helper 针对已验收的 MySPT_Machine/MySPT_Machine.sln 布局及 PLC 根，拒绝主 checkout、脏副本、覆盖 Profile、目录级授权和 623。深层 Method 授权须匹配已有 FB 文件中的 FolderPath 和方法；启动前复核同一对象，不能授权整棵 POUs。任务前缀 NexPlcXae-Dev-、管道前缀 nexplc-p4-dev- 是保留兼容协议，不随文档整理改名。
 
 ## 命令
 

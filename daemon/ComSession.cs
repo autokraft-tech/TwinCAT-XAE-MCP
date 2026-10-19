@@ -33,12 +33,12 @@ namespace Te1000Daemon
         public int XaePid { get { return _xaePid; } }
         private ProjectSaveAudit _saveAudit;
         internal ProjectSaveAudit SaveAudit { get { return _saveAudit ?? (_saveAudit = new ProjectSaveAudit(OfflinePolicy.SolutionPath)); } }
-        internal void BeforeObjectWrite(string path, bool create, int type = 604)
+        internal void BeforeObjectWrite(string path, bool create, int type = 604, string methodOwner = null)
         {
             AssertRecoveredSaved();
             foreach (dynamic document in _dte.Documents)
                 if (!(bool)document.Saved) throw new BridgeException("Unsaved editor document detected; preserve user edits before MCP writes.");
-            SaveAudit.BeforeObjectWrite(path, create, type);
+            SaveAudit.BeforeObjectWrite(path, create, type, methodOwner);
         }
         internal Json.JObj SaveAudited()
         {

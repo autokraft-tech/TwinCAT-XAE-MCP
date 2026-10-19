@@ -13,3 +13,5 @@ const creation = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", 
 if (creation.status !== 0) process.exit(creation.status || 1);
 const profile = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "dev-profile.test.ps1")], { stdio: "inherit", windowsHide: true });
 if (profile.status !== 0) process.exit(profile.status || 1);
+const nested = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.resolve(__dirname, "../daemon/test-nested-method.ps1")], { stdio: "inherit", windowsHide: true });
+if (nested.status !== 0) process.exit(nested.status || 1);
